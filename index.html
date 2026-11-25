@@ -7710,6 +7710,13 @@
   function parseVencimentosContagens(rowsRaw){
     var porData = {};
     var warnings = { semCodigo:0, semData:0, unidadeDesconhecida:0, semFator:0 };
+    var semFatorPorData = {};
+    function guardaSemFator(dataISO, codigo, descricao, unidade, qtd, endereco, desconhecida){
+      if (desconhecida) warnings.unidadeDesconhecida++; else warnings.semFator++;
+      var b = semFatorPorData[dataISO] || (semFatorPorData[dataISO] = {});
+      var g = b[codigo] || (b[codigo] = { codigo:codigo, descricao:descricao, unidade:unidade, qtd:0 });
+      g.qtd += Number(qtd)||0;
+    }
     for (var i=1;i<rowsRaw.length;i++){
       var row = rowsRaw[i]; if (!row) continue;
       var codigo = normCodigoStr(row[8]);
@@ -7733,10 +7740,10 @@
       var caixas = 0;
       // Produto em dúzia (Parâmetros): quantidade em DÚZIAS. 1 CX física = 2 dz; PL/LST já vêm em dz pelos parâmetros.
       if (unidade === "CX") caixas = Number(qtd) * (p.duzia ? 2 : 1);
-      else if (unidade === "UN"){ if (p.unidadesPorCaixa>0) caixas = Number(qtd)/p.unidadesPorCaixa; else { warnings.semFator++; continue; } }
-      else if (unidade === "PL"){ if (p.caixasPorPallet>0) caixas = Number(qtd)*p.caixasPorPallet; else { warnings.semFator++; continue; } }
-      else if (unidade === "LST"){ if (p.caixasPorLastro>0) caixas = Number(qtd)*p.caixasPorLastro; else { warnings.semFator++; continue; } }
-      else { warnings.unidadeDesconhecida++; continue; }
+      else if (unidade === "UN"){ if (p.unidadesPorCaixa>0) caixas = Number(qtd)/p.unidadesPorCaixa; else { guardaSemFator(dataISO, codigo, descricao, unidade, qtd, endereco); continue; } }
+      else if (unidade === "PL"){ if (p.caixasPorPallet>0) caixas = Number(qtd)*p.caixasPorPallet; else { guardaSemFator(dataISO, codigo, descricao, unidade, qtd, endereco); continue; } }
+      else if (unidade === "LST"){ if (p.caixasPorLastro>0) caixas = Number(qtd)*p.caixasPorLastro; else { guardaSemFator(dataISO, codigo, descricao, unidade, qtd, endereco); continue; } }
+      else { guardaSemFator(dataISO, codigo, descricao, unidade, qtd, endereco, true); continue; }
       var hl = (p.hlPorCaixa||0) * caixas;
       var emb = abastEmbalagemLookup(codigo);
       var isChopp = isChoppEmbalagem(emb);
@@ -7753,7 +7760,9 @@
       items.sort(function(a,b){ return (a.validade||"9999").localeCompare(b.validade||"9999"); });
       result[dataISO] = items;
     });
-    return { porData: result, warnings: warnings };
+    var semFator = {};
+    Object.keys(semFatorPorData).forEach(function(d){ semFator[d] = Object.keys(semFatorPorData[d]).map(function(c){ var g = semFatorPorData[d][c]; g.qtd = Math.round(g.qtd*1000)/1000; return g; }); });
+    return { porData: result, warnings: warnings, semFator: semFator };
   }
 
   function handleVencFileSelect(ev){
@@ -7776,7 +7785,7 @@
           var custoRows = XLSX.utils.sheet_to_json(wb.Sheets["02.05.02"], { header:1, blankrows:false, defval:null });
           custos = processCustoSheet(custoRows).custos;
         }
-        state.vencImportPreviewData = { porData: parsed.porData, warnings: parsed.warnings, custos: custos, sourceFileName: file.name, base: state.vencImportBase };
+        state.vencImportPreviewData = { porData: parsed.porData, semFator: parsed.semFator || {}, warnings: parsed.warnings, custos: custos, sourceFileName: file.name, base: state.vencImportBase };
         renderVencImportPreview();
       } catch(err){
         document.getElementById("vencImportPreview").innerHTML = '<div class="banner warn">Não consegui ler o arquivo: '+esc(err.message)+'</div>';
@@ -7796,8 +7805,8 @@
     var avisos = [];
     if (w.semCodigo) avisos.push(w.semCodigo+" linha(s) sem código");
     if (w.semData) avisos.push(w.semData+" linha(s) sem Data Contagem reconhecível");
-    if (w.unidadeDesconhecida) avisos.push(w.unidadeDesconhecida+" linha(s) com Unidade Contada não reconhecida (esperado PL/CX/UN/LST)");
-    if (w.semFator) avisos.push(w.semFator+" linha(s) sem fator de conversão cadastrado (veja Parâmetros)");
+    if (w.unidadeDesconhecida) avisos.push(w.unidadeDesconhecida+" linha(s) com Unidade Contada não reconhecida (esperado PL/CX/UN/LST) — entram só na aba Venda Zero");
+    if (w.semFator) avisos.push(w.semFator+" linha(s) sem fator de conversão cadastrado (veja Parâmetros) — entram no estoque só na aba Venda Zero, sem valor em R$");
     host.innerHTML =
       '<div class="banner">Arquivo <strong>'+esc(result.sourceFileName)+'</strong> — base <strong>'+esc(result.base)+'</strong>: '+fmtInt(totalItens)+' lote(s) em '+fmtInt(datas.length)+' data(s) de contagem ('+datas.map(fmtDate).join(", ")+'). Custo médio: '+fmtInt(Object.keys(result.custos||{}).length)+' produtos (aba 02.05.02).'+
       (avisos.length ? ('<br><span style="color:var(--status-warning,#b45309);">'+avisos.map(esc).join(' · ')+'</span>') : '') +
@@ -7814,11 +7823,12 @@
     if (btn){ btn.disabled = true; btn.textContent = "Importando…"; }
     var now = new Date().toISOString();
     var writes = [];
-    Object.keys(result.porData).forEach(function(dataISO){
+    var datasSet = {}; Object.keys(result.porData).forEach(function(d){ datasSet[d] = true; }); Object.keys(result.semFator||{}).forEach(function(d){ datasSet[d] = true; });
+    Object.keys(datasSet).forEach(function(dataISO){
       var docId = peBaseSlug(result.base)+"-"+dataISO;
       writes.push(db.doc("vencimentosContagem/"+docId).set({
         base: result.base, dataContagem: dataISO, importedAt: now, sourceFileName: result.sourceFileName,
-        custos: result.custos||{}, items: result.porData[dataISO]
+        custos: result.custos||{}, items: result.porData[dataISO]||[], semFator: (result.semFator||{})[dataISO]||[]
       }));
     });
     Promise.all(writes).then(function(){
@@ -9110,11 +9120,18 @@
       if (r.descricao) g.descricao = r.descricao;
       if (!r.validadeSentinela && r.validade && (!g.proxVenc || r.validade < g.proxVenc)) g.proxVenc = r.validade;
     });
+    Object.keys(active).forEach(function(base){
+      (active[base].semFator || []).forEach(function(sf){
+        var k = base+"||"+sf.codigo;
+        if (porKey[k]) return;
+        porKey[k] = { base:base, codigo:sf.codigo, descricao:sf.descricao, isChopp:false, caixas:0, hl:0, proxVenc:null, semFator:true, qtdRaw:sf.qtd, unidadeRaw:sf.unidade };
+      });
+    });
     var pux = (state.vendaZeroPuxada && state.vendaZeroPuxada.porBase) || {};
     var out = [], semDadosVenda = 0, semUltimaVenda = 0;
     Object.keys(porKey).forEach(function(k){
       var g = porKey[k];
-      var qtd = g.isChopp ? g.hl*100 : g.caixas;
+      var qtd = g.semFator ? g.qtdRaw : (g.isChopp ? g.hl*100 : g.caixas);
       if (!(qtd > 0)) return;
       var vd = state.peVendaPorBase[g.base];
       if (!vd || !vd.maxData){ semDadosVenda++; return; }
@@ -9129,8 +9146,8 @@
       var diasAjust = ref ? Math.max(0, vzDiff(corte, ref)) : periodo;
       var custo = lookupCusto(custosByBase, g.base, g.codigo);
       out.push({
-        base:g.base, codigo:g.codigo, descricao:g.descricao, isChopp:g.isChopp, qtd:qtd, unit:unidLbl(g.codigo, g.isChopp),
-        valor: abastRSDisplay(g.codigo, g.isChopp, qtd, custo), semCusto: custo==null,
+        base:g.base, codigo:g.codigo, descricao:g.descricao, isChopp:g.isChopp, qtd:qtd, unit: g.semFator ? g.unidadeRaw : unidLbl(g.codigo, g.isChopp),
+        valor: g.semFator ? null : abastRSDisplay(g.codigo, g.isChopp, qtd, custo), semCusto: custo==null, semFator: !!g.semFator,
         curva: (curvaMap[g.base] && curvaMap[g.base][g.codigo]) || null,
         ultimaVenda: ultV, ultimaPuxada: ultP, corte: corte, nuncaVendeu: !ultV,
         diasBruto: diasBruto, diasAjust: diasAjust, chegou: chegou,
@@ -9229,7 +9246,7 @@
         '<td><div style="display:flex; align-items:center; gap:10px;"><b class="tabular" style="min-width:46px; color:'+f.cor+';">'+d+' d</b><div class="vz-bar" style="flex:1;"><i style="width:'+w.toFixed(0)+'%; background:'+f.cor+';"></i></div></div>'+obs+'</td>' +
         '<td class="tabular">'+(r.ultimaVenda?fmtDate(r.ultimaVenda):'—')+'</td><td class="tabular">'+(r.ultimaPuxada?fmtDate(r.ultimaPuxada):'—')+'</td>' +
         '<td class="num tabular">'+fmtNum(r.qtd,r.isChopp?0:1)+' '+esc(r.unit)+'</td>' +
-        '<td class="num tabular" style="font-weight:700;">'+(r.valor==null?'<span title="sem custo cadastrado" style="color:var(--text-muted);">sem custo</span>':fmtBRL(r.valor))+'</td>' +
+        '<td class="num tabular" style="font-weight:700;">'+(r.valor==null?(r.semFator?'<span title="Produto contado em UN/PL/LST sem fator de conversão em Parâmetros: o saldo está na unidade contada e o valor não é calculado" style="color:var(--text-muted);">sem fator</span>':'<span title="sem custo cadastrado" style="color:var(--text-muted);">sem custo</span>'):fmtBRL(r.valor))+'</td>' +
         '<td class="tabular">'+venc+'</td></tr>';
     }).join("");
     host.innerHTML = '<div class="table-wrap compact" style="max-height:640px;"><table><thead>'+thead+'</thead><tbody>'+tbody+'</tbody></table></div>' +
