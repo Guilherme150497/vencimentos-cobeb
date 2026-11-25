@@ -7841,14 +7841,27 @@
   function renderVencImportHistorico(){
     var host = document.getElementById("vencImportHistoricoHost");
     if (!host) return;
-    var docs = Object.keys(state.vencContagem).map(function(id){ return state.vencContagem[id]; }).sort(function(a,b){
+    var docs = Object.keys(state.vencContagem).map(function(id){ return Object.assign({ __id:id }, state.vencContagem[id]); }).sort(function(a,b){
       return (b.dataContagem||"").localeCompare(a.dataContagem||"") || (a.base||"").localeCompare(b.base||"");
     });
     if (!docs.length){ host.innerHTML = '<div class="empty">Nenhuma contagem importada ainda.</div>'; return; }
-    host.innerHTML = '<div class="table-wrap compact"><table><thead><tr><th>Base</th><th>Data da contagem</th><th>Arquivo</th><th class="num">Lotes</th><th class="num">Custos</th></tr></thead><tbody>' +
+    host.innerHTML = '<div class="table-wrap compact"><table><thead><tr><th>Base</th><th>Data da contagem</th><th>Arquivo</th><th class="num">Lotes</th><th class="num">Custos</th><th></th></tr></thead><tbody>' +
       docs.map(function(d){
-        return '<tr><td>'+esc(d.base)+'</td><td class="tabular">'+fmtDate(d.dataContagem)+'</td><td>'+esc(d.sourceFileName||"—")+'</td><td class="num tabular">'+fmtInt((d.items||[]).length)+'</td><td class="num tabular">'+fmtInt(Object.keys(d.custos||{}).length)+'</td></tr>';
+        return '<tr><td>'+esc(d.base)+'</td><td class="tabular">'+fmtDate(d.dataContagem)+'</td><td>'+esc(d.sourceFileName||"—")+'</td><td class="num tabular">'+fmtInt((d.items||[]).length)+'</td><td class="num tabular">'+fmtInt(Object.keys(d.custos||{}).length)+'</td><td style="text-align:right;"><button class="btn btn-sm" data-vencdel="'+esc(d.__id)+'">🗑 Excluir</button></td></tr>';
       }).join("") + '</tbody></table></div>';
+      Array.prototype.forEach.call(host.querySelectorAll("[data-vencdel]"), function(btn){
+      btn.addEventListener("click", function(){
+        if (btn.getAttribute("data-conf") !== "1"){
+          btn.setAttribute("data-conf","1"); btn.textContent = "Confirmar exclusão?"; btn.style.color = "var(--status-critical)";
+          setTimeout(function(){ if (btn.isConnected){ btn.removeAttribute("data-conf"); btn.textContent = "🗑 Excluir"; btn.style.color = ""; } }, 6000);
+          return;
+        }
+        btn.disabled = true; btn.textContent = "Excluindo…";
+        db.collection("vencimentosContagem").doc(btn.getAttribute("data-vencdel")).delete().then(function(){
+          avisoTela("Contagem excluída.");
+        }).catch(function(e){ btn.disabled = false; btn.textContent = "🗑 Excluir"; avisoTela("Não foi possível excluir: "+(e && e.message || e)); });
+      });
+    });
   }
 
   function initVencImportTab(){
