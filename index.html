@@ -8472,7 +8472,7 @@
   function ddGerarSlideFarolDiario(){
     var done = fdBotao("btnGerarSlideFarolDiario", "Montando slide…");
     fdCarregarPptx().then(function(){ return fdCapturar(); }).then(function(info){
-      var W = FD_CAP_W, maxH = Math.round(W*9/16), sc = info.scale, src = info.canvas;
+      var W = FD_CAP_W, maxH = Math.round(W*6.3/13.333), sc = info.scale, src = info.canvas;
       var rows = info.rows, chunks = [], i = 0;
       if (!rows.length) chunks.push({ from:0, to:info.totalH, head:false });
       while (i < rows.length){
@@ -8503,7 +8503,10 @@
         ctx.drawImage(src, 0, c.from*sc, src.width, (c.to-c.from)*sc, 0, y*sc, src.width, (c.to-c.from)*sc);
         var slide = pptx.addSlide();
         slide.background = { color: "FFFFFF" };
-        slide.addImage({ data: cv.toDataURL("image/png").replace(/^data:/,""), x:0, y:0, w:13.333, h:7.5 });
+        slide.addShape("rect", { x:0, y:0, w:13.333, h:0.95, fill:{ color:"0040A8" }, line:{ color:"0040A8" } });
+        slide.addText("Farol Diário de Vencimentos", { x:0.4, y:0.08, w:9.5, h:0.5, fontSize:26, bold:true, color:"FFFFFF", fontFace:"Calibri" });
+        slide.addText("Filial: "+(state.farolDiarioBase==="todas"?"Todas":state.farolDiarioBase)+"  •  "+new Date().toLocaleDateString("pt-BR"), { x:0.4, y:0.55, w:9.5, h:0.3, fontSize:13, color:"DCE6FA", fontFace:"Calibri" });
+        slide.addImage({ data: cv.toDataURL("image/png").replace(/^data:/,""), x:0, y:1.05, w:13.333, h:6.3 });
       });
       return pptx.write({ outputType: "blob" });
     }).then(function(blob){
@@ -9157,6 +9160,59 @@
     out.semDadosVenda = semDadosVenda; out.semUltimaVenda = semUltimaVenda;
     return out;
   }
+  function vzGerarSlide(rows){
+    if (!rows.length){ avisoTela("Nenhum item nos filtros atuais para gerar o slide."); return; }
+    var done = fdBotao("vzSlide", "Montando slide…");
+    fdCarregarPptx().then(function(){
+      var pptx = new PptxGenJS(); pptx.layout = "LAYOUT_WIDE";
+      var fx = VZ_FAIXAS.filter(function(f){ return f.v === state.vzFaixa; })[0];
+      var fxl = state.vzFaixa==="custom" ? ("Mais de "+(parseInt(state.vzCustom,10)||0)+" dias") : (fx ? fx.l : "Todas");
+      var sub = "Filial: "+(state.vzBase==="todas"?"Todas":state.vzBase)+"  •  Tipo: "+(state.vzModo==="todos"?"Todos":(state.vzModo==="chopp"?"Chopp":"Produtos"))+"  •  Curva: "+(state.vzCurva==="todas"?"Todas":state.vzCurva)+"  •  Dias sem venda: "+fxl+"  •  Puxada: "+(state.vzPuxada?"considerada":"não considerada");
+      var MAXR = 200, lista = rows.slice(0, MAXR), P1 = 9, PN = 13;
+      var valorTot = rows.reduce(function(s,r){ return s+(r.valor||0); }, 0);
+      var g90 = rows.filter(function(r){ return vzDias(r) > 90; }).length;
+      var v30 = rows.filter(function(r){ return r.diasVencer!=null && r.diasVencer <= 30; }).length;
+      var pags = [], i = 0;
+      pags.push(lista.slice(0, P1)); i = P1;
+      while (i < lista.length){ pags.push(lista.slice(i, i+PN)); i += PN; }
+      var hdr = ["Filial","Código","Descrição","Curva","Dias s/ venda","Saldo","Valor (R$)","Próx. venc."].map(function(t){ return { text:t, options:{ bold:true, color:"FFFFFF", fill:{ color:"0040A8" }, align:"center", fontSize:11 } }; });
+      pags.forEach(function(pg, pi){
+        var sl = pptx.addSlide(); sl.background = { color:"FFFFFF" };
+        sl.addShape("rect", { x:0, y:0, w:13.333, h:0.95, fill:{ color:"0040A8" }, line:{ color:"0040A8" } });
+        sl.addText("Venda Zero — produtos com saldo e sem vender", { x:0.4, y:0.06, w:12.5, h:0.5, fontSize:26, bold:true, color:"FFFFFF", fontFace:"Calibri" });
+        sl.addText(sub, { x:0.4, y:0.56, w:12.5, h:0.32, fontSize:11, color:"DCE6FA", fontFace:"Calibri" });
+        var y = 1.1;
+        if (pi === 0){
+          var ks = [["SKUs sem vender", fmtInt(rows.length)],["R$ parado em estoque", fmtBRL(valorTot)],["Mais de 90 dias", fmtInt(g90)],["Vencem em até 30 dias", fmtInt(v30)]];
+          ks.forEach(function(k, ki){
+            var x = 0.4 + ki*3.15;
+            sl.addShape("rect", { x:x, y:y, w:3.0, h:0.95, fill:{ color:"F2F5FB" }, line:{ color:"C9D5EE", width:1 } });
+            sl.addText(k[0], { x:x+0.1, y:y+0.04, w:2.8, h:0.3, fontSize:11, color:"555555" });
+            sl.addText(k[1], { x:x+0.1, y:y+0.36, w:2.8, h:0.5, fontSize:22, bold:true, color:"0040A8" });
+          });
+          y = 2.2;
+        }
+        var body = pg.map(function(r, ri){
+          var d = vzDias(r), cor = d<=15?"2E7D32":d<=30?"C9A000":d<=45?"E07B00":d<=90?"D4380D":"B42318";
+          var f = { color: ri%2 ? "F7F9FD" : "FFFFFF" };
+          var o = function(al, ex){ var b = { fontSize:10.5, align:al, fill:f, color:"222222" }; for (var k in ex) b[k]=ex[k]; return b; };
+          return [
+            { text:r.base, options:o("left") }, { text:String(r.codigo), options:o("center") },
+            { text:String(r.descricao||""), options:o("left") }, { text:r.curva||"", options:o("center") },
+            { text:String(d), options:o("center", { bold:true, color:"FFFFFF", fill:{ color:cor } }) },
+            { text:(Math.round(r.qtd*100)/100).toLocaleString("pt-BR")+" "+(r.unit||""), options:o("right") },
+            { text:r.valor==null?"—":fmtBRL(r.valor), options:o("right") },
+            { text:r.proxVenc||"—", options:o("center") }
+          ];
+        });
+        sl.addTable([hdr].concat(body), { x:0.4, y:y, w:12.5, colW:[1.7,0.9,4.0,0.7,1.2,1.5,1.5,1.0], rowH:0.34, fontFace:"Calibri", border:{ type:"solid", color:"D9DFEC", pt:0.5 }, valign:"middle" });
+        var rod = "Página "+(pi+1)+" de "+pags.length+"  •  Gerado em "+new Date().toLocaleDateString("pt-BR")+(rows.length>MAXR && pi===pags.length-1 ? "  •  Exibindo os "+MAXR+" primeiros de "+rows.length+" — use o Excel para a lista completa" : "");
+        sl.addText(rod, { x:0.4, y:7.1, w:12.5, h:0.3, fontSize:10, color:"777777" });
+      });
+      return pptx.write({ outputType:"blob" });
+    }).then(function(blob){ done(); fdSalvarBlob(blob, "venda-zero-"+fdTs()+".pptx"); })
+    .catch(function(err){ done(); avisoTela("Erro ao montar o slide: "+(err && err.message || err)); });
+  }
   function vzDias(r){ return state.vzPuxada ? r.diasAjust : r.diasBruto; }
   function vzFiltrar(base, ignorarFaixa){
     var q = (state.vzBusca||"").trim().toLowerCase();
@@ -9199,7 +9255,7 @@
       '<div style="display:flex; gap:20px; flex-wrap:wrap; align-items:flex-end; margin-top:12px;">' + grp("Dias sem venda", gFaixa) +
         grp("Considerar puxada", pill("data-vzpux", "1", "Sim — contar desde a chegada", state.vzPuxada) + pill("data-vzpux", "0", "Não — só última venda", !state.vzPuxada)) +
         grp("Busca", '<input type="search" id="vzBusca" placeholder="Código ou descrição…" style="min-width:220px;" value="'+esc(state.vzBusca)+'">') +
-        '<span style="flex:1"></span><button class="btn btn-sm" id="vzExport">⬇ Exportar Excel</button></div>';
+        '<span style="flex:1"></span><button class="btn btn-sm" id="vzSlide">📊 Gerar slide (PowerPoint)</button> <button class="btn btn-sm" id="vzExport">⬇ Exportar Excel</button></div>';
     function bind(attr, key, after){ Array.prototype.forEach.call(document.querySelectorAll("["+attr+"]"), function(b){ b.addEventListener("click", function(){ state[key] = b.getAttribute(attr); if (after) after(b); renderVendaZeroTab(); }); }); }
     bind("data-vzbase","vzBase"); bind("data-vzfaixa","vzFaixa"); bind("data-vzmodo","vzModo"); bind("data-vzcurva","vzCurva");
     Array.prototype.forEach.call(document.querySelectorAll("[data-vzpux]"), function(b){ b.addEventListener("click", function(){ state.vzPuxada = b.getAttribute("data-vzpux")==="1"; renderVendaZeroTab(); }); });
@@ -9217,6 +9273,7 @@
         "Próx. vencimento":r.proxVenc||"", "Dias p/ vencer":r.diasVencer==null?"":r.diasVencer, "Observação": r.chegou ? "Chegou após a última venda" : (r.nuncaVendeu ? "Sem venda no período" : "")
       }; }), "venda_zero_"+todayISO()+".xlsx", "Venda Zero", [{wch:16},{wch:9},{wch:40},{wch:7},{wch:12},{wch:12},{wch:12},{wch:12},{wch:10},{wch:8},{wch:16},{wch:14},{wch:12},{wch:28}]);
     });
+    document.getElementById("vzSlide").addEventListener("click", function(){ vzGerarSlide(rows); });
     // KPIs
     var valorTot = rows.reduce(function(s,r){ return s+(r.valor||0); }, 0);
     var valorEst = vzFiltrar(todas, true).length ? 0 : 0;
