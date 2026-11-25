@@ -9070,17 +9070,19 @@
 
   // ======================= VENDA ZERO =======================
   state.vzBase = "todas"; state.vzFaixa = "todas"; state.vzModo = "todos"; state.vzCurva = "todas";
-  state.vzPuxada = true; state.vzBusca = ""; state.vzSort = "dias"; state.vendaZeroPuxada = null;
+  state.vzPuxada = true; state.vzCustom = ""; state.vzBusca = ""; state.vzSort = "dias"; state.vendaZeroPuxada = null;
+  // Filtros cumulativos: "mais de X dias sem vender" (quem passa de 90 também aparece em >15, >30 e >45).
   var VZ_FAIXAS = [
-    { v:"todas", l:"Todas", min:1, max:99999, cor:"var(--accent)" },
-    { v:"f15", l:"1 a 15 dias", min:1, max:15, cor:"var(--status-good, #2e7d32)" },
-    { v:"f30", l:"16 a 30 dias", min:16, max:30, cor:"#c9a000" },
-    { v:"f45", l:"31 a 45 dias", min:31, max:45, cor:"#e07b00" },
-    { v:"f90", l:"46 a 90 dias", min:46, max:90, cor:"#d4380d" },
-    { v:"g90", l:"Mais de 90 dias", min:91, max:99999, cor:"var(--status-critical, #b42318)" }
+    { v:"todas", l:"Todas", min:1, max:99999 },
+    { v:"g15", l:"Mais de 15 dias", min:16, max:99999 },
+    { v:"g30", l:"Mais de 30 dias", min:31, max:99999 },
+    { v:"g45", l:"Mais de 45 dias", min:46, max:99999 },
+    { v:"g90", l:"Mais de 90 dias", min:91, max:99999 }
   ];
+  // Cor da barra pela situação real do produto (independente do filtro escolhido).
+  var VZ_CORES = [ { max:15, cor:"var(--status-good, #2e7d32)" }, { max:30, cor:"#c9a000" }, { max:45, cor:"#e07b00" }, { max:90, cor:"#d4380d" }, { max:99999, cor:"var(--status-critical, #b42318)" } ];
   function vzDiff(aIso, bIso){ return Math.round((new Date(aIso+"T00:00:00") - new Date(bIso+"T00:00:00"))/86400000); }
-  function vzFaixaDe(d){ for (var i=1;i<VZ_FAIXAS.length;i++){ if (d>=VZ_FAIXAS[i].min && d<=VZ_FAIXAS[i].max) return VZ_FAIXAS[i]; } return VZ_FAIXAS[5]; }
+  function vzFaixaDe(d){ for (var i=0;i<VZ_CORES.length;i++){ if (d<=VZ_CORES[i].max) return VZ_CORES[i]; } return VZ_CORES[VZ_CORES.length-1]; }
   // Todas as linhas (base+SKU com saldo) já com dias sem venda calculados; os filtros aplicam depois.
   function vendaZeroBase(){
     var active = vencActiveSnapshots("atual");
@@ -9129,6 +9131,7 @@
   function vzFiltrar(base, ignorarFaixa){
     var q = (state.vzBusca||"").trim().toLowerCase();
     var fx = VZ_FAIXAS.filter(function(f){ return f.v === state.vzFaixa; })[0] || VZ_FAIXAS[0];
+    if (state.vzFaixa === "custom"){ var n = parseInt(state.vzCustom,10); fx = { min: (n>0 ? n+1 : 1), max: 99999 }; }
     return base.filter(function(r){
       if (state.vzBase !== "todas" && r.base !== state.vzBase) return false;
       if (state.vzModo === "produtos" && r.isChopp) return false;
@@ -9157,6 +9160,7 @@
       var n = f.v==="todas" ? base.length : base.filter(function(r){ var d=vzDias(r); return d>=f.min && d<=f.max; }).length;
       return pill("data-vzfaixa", f.v, f.l, state.vzFaixa===f.v, ' <span style="opacity:.7">('+n+')</span>');
     }).join("");
+    gFaixa += '<span style="display:inline-flex; align-items:center; gap:6px; font-size:13px;">ou mais de <input type="number" min="1" id="vzCustom" style="width:70px;" value="'+esc(state.vzCustom)+'" placeholder="__"> dias</span>';
     var gModo = [["todos","Todos"],["produtos","Produtos"],["chopp","Chopp"]].map(function(m){ return pill("data-vzmodo", m[0], m[1], state.vzModo===m[0]); }).join("");
     var gCurva = [["todas","Todas"],["A","A"],["B","B"],["C","C"]].map(function(m){ return pill("data-vzcurva", m[0], m[1], state.vzCurva===m[0]); }).join("");
     function grp(t, inner){ return '<div class="vz-grp"><span class="t">'+t+'</span><div>'+inner+'</div></div>'; }
@@ -9169,6 +9173,8 @@
     function bind(attr, key, after){ Array.prototype.forEach.call(document.querySelectorAll("["+attr+"]"), function(b){ b.addEventListener("click", function(){ state[key] = b.getAttribute(attr); if (after) after(b); renderVendaZeroTab(); }); }); }
     bind("data-vzbase","vzBase"); bind("data-vzfaixa","vzFaixa"); bind("data-vzmodo","vzModo"); bind("data-vzcurva","vzCurva");
     Array.prototype.forEach.call(document.querySelectorAll("[data-vzpux]"), function(b){ b.addEventListener("click", function(){ state.vzPuxada = b.getAttribute("data-vzpux")==="1"; renderVendaZeroTab(); }); });
+    var cu = document.getElementById("vzCustom");
+    if (cu) cu.addEventListener("change", function(){ state.vzCustom = this.value; state.vzFaixa = this.value ? "custom" : "todas"; renderVendaZeroTab(); });
     var bu = document.getElementById("vzBusca");
     bu.addEventListener("input", function(){ state.vzBusca = this.value; var pos = this.selectionStart; renderVendaZeroTab(); var n = document.getElementById("vzBusca"); n.focus(); try{ n.setSelectionRange(pos,pos); }catch(e){} });
     var rows = vzFiltrar(todas, false);
