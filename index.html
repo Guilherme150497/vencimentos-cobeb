@@ -9150,7 +9150,7 @@
       var custo = lookupCusto(custosByBase, g.base, g.codigo);
       out.push({
         base:g.base, codigo:g.codigo, descricao:g.descricao, isChopp:g.isChopp, qtd:qtd, unit: g.semFator ? g.unidadeRaw : unidLbl(g.codigo, g.isChopp),
-        valor: g.semFator ? null : abastRSDisplay(g.codigo, g.isChopp, qtd, custo), semCusto: custo==null, semFator: !!g.semFator,
+        valor: g.semFator ? ((/^(UN|UND|UNID)$/i.test(String(g.unidadeRaw||"").trim()) && custo!=null) ? qtd*custo : null) : abastRSDisplay(g.codigo, g.isChopp, qtd, custo), semCusto: custo==null, semFator: !!g.semFator,
         curva: (curvaMap[g.base] && curvaMap[g.base][g.codigo]) || null,
         ultimaVenda: ultV, ultimaPuxada: ultP, corte: corte, nuncaVendeu: !ultV,
         diasBruto: diasBruto, diasAjust: diasAjust, chegou: chegou,
