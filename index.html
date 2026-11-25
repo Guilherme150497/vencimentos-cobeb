@@ -8748,7 +8748,7 @@
   // Aviso: o controle de acesso roda no navegador (o artifact não tem servidor). Ele barra a tela e
   // bloqueia gravações de quem é "leitor", mas não substitui o compartilhamento do próprio artifact.
   var SEED_ADMIN = { email:"guilherme.martins@cobeb.com.br", nome:"Guilherme Martins", perfil:"admin", ativo:true,
-    salt:"ae254015f950a5f1849c175b", hash:"3b35b6bcfe01c516816a7f7b3b2260ee5a5c19509fa6be0570d17bc1f4b0ba79" };
+    salt:"", hash:"" };
   var PERFIS = { admin:"Administrador", editor:"Editor", leitor:"Leitor" };
   var dbRaw = null;
   state.user = null; state.usuarios = [];
@@ -8787,7 +8787,7 @@
     var id = userIdOf(email);
     return dbRaw.doc("usuarios/"+id).get().then(function(snap){
       if (snap.exists) return snap.data();
-      if (String(email).trim().toLowerCase() === SEED_ADMIN.email) return SEED_ADMIN;
+      if (!SUPA_MODE && String(email).trim().toLowerCase() === SEED_ADMIN.email) return SEED_ADMIN;
       return null;
     });
   }
@@ -8799,6 +8799,17 @@
   }
   function limparSessao(){ try{ sessionStorage.removeItem("vencSessao"); localStorage.removeItem("vencSessao"); }catch(e){} }
   function validarCredencial(email, senhaOuNull, hashSalvo){
+    if (SUPA_MODE){
+      var passo = hashSalvo ? sbClient.auth.getSession().then(function(r){ return r.data && r.data.session ? true : false; })
+        : sbClient.auth.signInWithPassword({ email: email, password: senhaOuNull }).then(function(r){ return !r.error; });
+      return passo.then(function(ok){
+        if (!ok) return null;
+        return buscarUsuarioDb(email).then(function(u){
+          if (!u || u.ativo === false){ sbClient.auth.signOut(); return null; }
+          return Object.assign({ hash: "supabase" }, u);
+        });
+      });
+    }
     return buscarUsuarioDb(email).then(function(u){
       if (!u || u.ativo === false) return null;
       if (hashSalvo) return (u.hash === hashSalvo) ? u : null;
@@ -8813,7 +8824,7 @@
     var chip = document.getElementById("userChip");
     if (chip) chip.innerHTML = '<span>'+esc(state.user.nome)+'</span><span class="perfil-tag">'+esc(PERFIS[state.user.perfil]||"")+'</span><button class="btn btn-sm" id="btnSair" type="button">Sair</button>';
     var sair = document.getElementById("btnSair");
-    if (sair) sair.addEventListener("click", function(){ limparSessao(); location.reload(); });
+    if (sair) sair.addEventListener("click", function(){ limparSessao(); if (SUPA_MODE && sbClient) sbClient.auth.signOut().then(function(){ location.reload(); }, function(){ location.reload(); }); else location.reload(); });
     var h2 = document.querySelector("#modHub h2"); if (h2) h2.textContent = state.user.nome;
     var av = document.querySelector("#modHub .hub-avatar"); if (av) av.textContent = (state.user.nome||"?").trim().charAt(0).toUpperCase();
     document.getElementById("loginGate").classList.remove("open");
@@ -8822,6 +8833,14 @@
     return new Promise(function(resolve){
       var gate = document.getElementById("loginGate");
       var sess = lerSessao();
+      if (SUPA_MODE){
+        sess = null;
+        sbClient.auth.getSession().then(function(r){
+          var em = r.data && r.data.session && r.data.session.user && r.data.session.user.email;
+          if (em) validarCredencial(em, null, "supabase").then(function(u){ if (u){ aplicarPerfil(Object.assign({ email: em }, u)); resolve(); } else mostrarLogin(); }).catch(mostrarLogin);
+          else mostrarLogin();
+        }).catch(mostrarLogin);
+      }
       function ok(u){ aplicarPerfil(u); resolve(); }
       function mostrarLogin(){
         gate.classList.add("open");
@@ -8838,7 +8857,8 @@
           }).catch(function(e2){ btn.disabled = false; btn.textContent = "Entrar"; err.textContent = "Erro ao entrar: "+(e2 && e2.message || e2); });
         });
       }
-      if (sess && sess.email && sess.hash){
+      if (SUPA_MODE){ /* tratado acima */ }
+      else if (sess && sess.email && sess.hash){
         validarCredencial(sess.email, null, sess.hash).then(function(u){
           if (u) ok(Object.assign({ email: sess.email }, u)); else { limparSessao(); mostrarLogin(); }
         }).catch(function(){ mostrarLogin(); });
@@ -8900,6 +8920,23 @@
     if (edicao && senha && senha.length < 6){ usuariosMsg("A nova senha precisa ter ao menos 6 caracteres.", true); return; }
     var id = userIdOf(email);
     var existente = state.usuarios.filter(function(u){ return u.id === id; })[0];
+    if (SUPA_MODE){
+      if (!edicao && senha.length < 6){ usuariosMsg("A senha precisa ter ao menos 6 caracteres.", true); return; }
+      var souEu = state.user && email === state.user.email;
+      if (edicao && senha && !souEu){ usuariosMsg("A senha de outro usuário não pode ser trocada aqui: peça para ele usar \"Esqueci a senha\" na tela de login.", true); return; }
+      var docU = { email: email, nome: nome, perfil: perfil, ativo: existente ? existente.ativo !== false : true };
+      if (!existente) docU.criadoEm = new Date().toISOString();
+      var etapa;
+      if (!edicao){
+        var aux = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
+        etapa = aux.auth.signUp({ email: email, password: senha }).then(function(r){ if (r.error) throw r.error; });
+      } else if (senha && souEu){ etapa = sbClient.auth.updateUser({ password: senha }).then(function(r){ if (r.error) throw r.error; }); }
+      else etapa = Promise.resolve();
+      etapa.then(function(){ return db.doc("usuarios/"+id).set(Object.assign({}, existente||{}, docU)); })
+        .then(function(){ usuariosMsg("Usuário salvo: "+email+"."); usuariosLimparForm(); })
+        .catch(function(e){ usuariosMsg("Erro ao salvar: "+(e && e.message || e), true); });
+      return;
+    }
     if (!edicao && (existente || email === SEED_ADMIN.email)){ usuariosMsg("Já existe usuário com esse e-mail. Use Editar.", true); return; }
     var base = { email: email, nome: nome, perfil: perfil, ativo: existente ? existente.ativo !== false : true };
     var p;
@@ -8918,10 +8955,95 @@
     if (s2) s2.addEventListener("click", function(){ usuariosLimparForm(); usuariosMsg(""); });
   })();
 
+  // ======================= MODO SUPABASE (GitHub Pages) =======================
+  // Dentro do claude.ai o banco é o do artifact (window.claude). Fora dele (GitHub Pages) o mesmo código
+  // usa o Supabase: tabela venc_dados (path -> jsonb) + Supabase Auth, com a mesma API doc/collection.
+  var SUPABASE_URL = "https://mbteychnzitqvakqloes.supabase.co";
+  var SUPABASE_KEY = "sb_publishable_99AVObN17tKTSBM2wBhwIg_546jF3rn";
+  var SUPA_MODE = !(window.claude && window.claude.use);
+  var sbClient = null;
+  function carregarScript(src){
+    return new Promise(function(res, rej){ var sc = document.createElement("script"); sc.src = src; sc.onload = res; sc.onerror = function(){ rej(new Error("Falha ao carregar "+src)); }; document.head.appendChild(sc); });
+  }
+  function makeSupabaseDb(sb){
+    var T = "venc_dados", listeners = [];
+    function onChange(p){
+      var path = (p.new && p.new.path) || (p.old && p.old.path);
+      if (!path) return;
+      listeners.forEach(function(l){ if (l.match(path)) l.schedule(); });
+    }
+    sb.channel("venc-dados").on("postgres_changes", { event:"*", schema:"public", table:T }, onChange).subscribe();
+    function limpar(d){ return JSON.parse(JSON.stringify(d == null ? {} : d)); }
+    function snapDoc(path, row){ return { id: path.split("/").pop(), exists: !!row, data: function(){ return row ? row.data : undefined; } }; }
+    function listen(match, fetchFn, cb, errCb){
+      var timer = null, ativo = true;
+      function run(){ fetchFn().then(function(r){ if (ativo) cb(r); }).catch(function(e){ if (errCb) errCb(e); }); }
+      var l = { match: match, schedule: function(){ clearTimeout(timer); timer = setTimeout(run, 250); } };
+      listeners.push(l); run();
+      return function(){ ativo = false; clearTimeout(timer); var i = listeners.indexOf(l); if (i >= 0) listeners.splice(i,1); };
+    }
+    function docRef(path){
+      var ref = {
+        id: path.split("/").pop(), path: path,
+        get: function(){ return sb.from(T).select("data").eq("path", path).maybeSingle().then(function(r){ if (r.error) throw r.error; return snapDoc(path, r.data); }); },
+        set: function(d){ return sb.from(T).upsert({ path: path, data: limpar(d), updated_at: new Date().toISOString() }).then(function(r){ if (r.error) throw r.error; }); },
+        update: function(d){ return ref.get().then(function(sn){ return ref.set(Object.assign({}, sn.exists ? sn.data() : {}, d)); }); },
+        delete: function(){ return sb.from(T).delete().eq("path", path).then(function(r){ if (r.error) throw r.error; }); },
+        onSnapshot: function(cb, errCb){ return listen(function(p){ return p === path; }, function(){ return ref.get(); }, cb, errCb); },
+        collection: function(n){ return colRef(path+"/"+n); },
+        acquire: function(){ return Promise.resolve({ acquired: true }); }
+      };
+      return ref;
+    }
+    function colRef(name){
+      function fetchAll(){
+        var out = [], from = 0, step = 500;
+        function page(){
+          return sb.from(T).select("path,data").like("path", name+"/%").order("path").range(from, from+step-1).then(function(r){
+            if (r.error) throw r.error;
+            (r.data||[]).forEach(function(row){ if (row.path.slice(name.length+1).indexOf("/") < 0) out.push(row); });
+            if ((r.data||[]).length === step){ from += step; return page(); }
+            return out;
+          });
+        }
+        return page().then(function(rows){
+          var docs = rows.map(function(row){ return snapDoc(row.path, row); });
+          return { docs: docs, size: docs.length, empty: !docs.length, forEach: function(f){ docs.forEach(f); } };
+        });
+      }
+      return {
+        doc: function(id){ return docRef(name+"/"+id); },
+        get: fetchAll,
+        add: function(d){ var id = "d"+Date.now().toString(36)+Math.random().toString(36).slice(2,8); var r = docRef(name+"/"+id); return r.set(d).then(function(){ return r; }); },
+        onSnapshot: function(cb, errCb){
+          return listen(function(p){ return p.indexOf(name+"/") === 0 && p.slice(name.length+1).indexOf("/") < 0; }, fetchAll, cb, errCb);
+        }
+      };
+    }
+    return { doc: docRef, collection: colRef };
+  }
+  function iniciarSupabase(){
+    return carregarScript("https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.58.0/dist/umd/supabase.js").then(function(){
+      sbClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+      downloadsCap = { save: function(o){
+        return new Promise(function(res){
+          var blob = (o.data instanceof Blob) ? o.data : new Blob([o.data]);
+          var a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = o.filename; document.body.appendChild(a); a.click();
+          setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); res(); }, 500);
+        });
+      } };
+      return makeSupabaseDb(sbClient);
+    });
+  }
+
   async function boot(){
-    try{ db = await window.claude.use("db"); }catch(e){ db = null; }
+    if (SUPA_MODE){
+      try{ db = await iniciarSupabase(); }catch(e){ db = null; }
+    } else {
+      try{ db = await window.claude.use("db"); }catch(e){ db = null; }
+      try{ downloadsCap = await window.claude.use("downloads"); }catch(e){ downloadsCap = null; }
+    }
     dbRaw = db;
-    try{ downloadsCap = await window.claude.use("downloads"); }catch(e){ downloadsCap = null; }
     if (!db){
       document.getElementById("loginGate").classList.remove("open"); document.getElementById("modHub").classList.remove("open");
       document.querySelector(".wrap").innerHTML = '<div class="card card-pad" style="margin-top:20px;"><div class="section-title">Não foi possível conectar ao armazenamento</div><p class="section-sub">Reabra este painel para tentar novamente.</p></div>';
