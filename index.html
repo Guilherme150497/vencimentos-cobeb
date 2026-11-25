@@ -9160,58 +9160,67 @@
     out.semDadosVenda = semDadosVenda; out.semUltimaVenda = semUltimaVenda;
     return out;
   }
+  // Slide(s) da Venda Zero: imagem fiel da tela do site (KPIs + tabela), quebrada por linhas, cabeçalho repetido.
   function vzGerarSlide(rows){
     if (!rows.length){ avisoTela("Nenhum item nos filtros atuais para gerar o slide."); return; }
+    if (typeof html2canvas !== "function"){ avisoTela("Não foi possível carregar o gerador de imagem. Recarregue a página."); return; }
+    var table = document.querySelector("#vzTabela table"), kp = document.getElementById("vzKpis");
+    if (!table){ avisoTela("Tabela não encontrada."); return; }
     var done = fdBotao("vzSlide", "Montando slide…");
+    var MAXR = 150, W = FD_CAP_W, maxH = Math.round(W*6.3/13.333);
+    var fx = VZ_FAIXAS.filter(function(f){ return f.v === state.vzFaixa; })[0];
+    var fxl = state.vzFaixa==="custom" ? ("Mais de "+(parseInt(state.vzCustom,10)||0)+" dias") : (fx ? fx.l : "Todas");
+    var sub = "Filial: "+(state.vzBase==="todas"?"Todas":state.vzBase)+"  •  Tipo: "+(state.vzModo==="todos"?"Todos":(state.vzModo==="chopp"?"Chopp":"Produtos"))+"  •  Curva: "+(state.vzCurva==="todas"?"Todas":state.vzCurva)+"  •  Dias sem venda: "+fxl+"  •  "+new Date().toLocaleDateString("pt-BR");
+    var host = document.createElement("div");
+    host.id = "vzCaptura";
+    host.style.cssText = "position:absolute; left:-99999px; top:0; width:"+W+"px; box-sizing:border-box; padding:24px; background:#fff;";
+    var kh = document.createElement("div"); kh.className = "kpi-grid"; kh.innerHTML = kp.innerHTML; host.appendChild(kh);
+    var wrap = document.createElement("div"); wrap.className = "table-wrap compact"; wrap.style.cssText = "max-height:none; overflow:visible; margin-top:14px;";
+    var t2 = table.cloneNode(false), th = table.querySelector("thead").cloneNode(true), tb = document.createElement("tbody");
+    Array.prototype.slice.call(table.querySelectorAll("tbody tr"), 0, MAXR).forEach(function(tr){ tb.appendChild(tr.cloneNode(true)); });
+    t2.appendChild(th); t2.appendChild(tb); wrap.appendChild(t2); host.appendChild(wrap);
+    document.body.appendChild(host);
+    var info = { rows: [], headTop:0, headH:0, totalH:0 };
+    var full = rows.length > MAXR;
     fdCarregarPptx().then(function(){
+      return html2canvas(host, { backgroundColor:"#ffffff", scale:2, windowWidth: W+80,
+        onclone: function(doc){
+          var c = doc.getElementById("vzCaptura"); if (!c) return;
+          c.style.left = "0"; c.style.position = "relative";
+          var top = c.getBoundingClientRect().top;
+          var h = c.querySelector("thead"); var hr = h.getBoundingClientRect(); info.headTop = hr.top - top; info.headH = hr.height;
+          Array.prototype.forEach.call(c.querySelectorAll("tbody tr"), function(r){ var rr = r.getBoundingClientRect(); info.rows.push({ top: rr.top-top, bottom: rr.bottom-top }); });
+          info.totalH = c.getBoundingClientRect().height;
+        } });
+    }).then(function(src){
+      host.remove();
+      var sc = src.width / W, chunks = [], i = 0, R = info.rows;
+      while (i < R.length){
+        var first = chunks.length === 0, from = first ? 0 : R[i].top;
+        var limit = from + (first ? maxH : (maxH - info.headH)), j = i;
+        while (j < R.length && R[j].bottom <= limit + 0.5) j++;
+        if (j === i) j = i + 1;
+        chunks.push({ from:from, to:(j >= R.length) ? info.totalH : R[j-1].bottom, head:!first });
+        i = j;
+      }
       var pptx = new PptxGenJS(); pptx.layout = "LAYOUT_WIDE";
-      var fx = VZ_FAIXAS.filter(function(f){ return f.v === state.vzFaixa; })[0];
-      var fxl = state.vzFaixa==="custom" ? ("Mais de "+(parseInt(state.vzCustom,10)||0)+" dias") : (fx ? fx.l : "Todas");
-      var sub = "Filial: "+(state.vzBase==="todas"?"Todas":state.vzBase)+"  •  Tipo: "+(state.vzModo==="todos"?"Todos":(state.vzModo==="chopp"?"Chopp":"Produtos"))+"  •  Curva: "+(state.vzCurva==="todas"?"Todas":state.vzCurva)+"  •  Dias sem venda: "+fxl+"  •  Puxada: "+(state.vzPuxada?"considerada":"não considerada");
-      var MAXR = 200, lista = rows.slice(0, MAXR), P1 = 9, PN = 13;
-      var valorTot = rows.reduce(function(s,r){ return s+(r.valor||0); }, 0);
-      var g90 = rows.filter(function(r){ return vzDias(r) > 90; }).length;
-      var v30 = rows.filter(function(r){ return r.diasVencer!=null && r.diasVencer <= 30; }).length;
-      var pags = [], i = 0;
-      pags.push(lista.slice(0, P1)); i = P1;
-      while (i < lista.length){ pags.push(lista.slice(i, i+PN)); i += PN; }
-      var hdr = ["Filial","Código","Descrição","Curva","Dias s/ venda","Saldo","Valor (R$)","Próx. venc."].map(function(t){ return { text:t, options:{ bold:true, color:"FFFFFF", fill:{ color:"0040A8" }, align:"center", fontSize:11 } }; });
-      pags.forEach(function(pg, pi){
+      chunks.forEach(function(c, ci){
+        var hh = c.head ? info.headH : 0;
+        var cv = document.createElement("canvas"); cv.width = Math.round(W*sc); cv.height = Math.round(maxH*sc);
+        var ctx = cv.getContext("2d"); ctx.fillStyle = "#ffffff"; ctx.fillRect(0,0,cv.width,cv.height);
+        var y = 0;
+        if (c.head){ ctx.drawImage(src, 0, info.headTop*sc, src.width, info.headH*sc, 0, 0, src.width, info.headH*sc); y = hh; }
+        ctx.drawImage(src, 0, c.from*sc, src.width, (c.to-c.from)*sc, 0, y*sc, src.width, (c.to-c.from)*sc);
         var sl = pptx.addSlide(); sl.background = { color:"FFFFFF" };
         sl.addShape("rect", { x:0, y:0, w:13.333, h:0.95, fill:{ color:"0040A8" }, line:{ color:"0040A8" } });
         sl.addText("Venda Zero — produtos com saldo e sem vender", { x:0.4, y:0.06, w:12.5, h:0.5, fontSize:26, bold:true, color:"FFFFFF", fontFace:"Calibri" });
-        sl.addText(sub, { x:0.4, y:0.56, w:12.5, h:0.32, fontSize:11, color:"DCE6FA", fontFace:"Calibri" });
-        var y = 1.1;
-        if (pi === 0){
-          var ks = [["SKUs sem vender", fmtInt(rows.length)],["R$ parado em estoque", fmtBRL(valorTot)],["Mais de 90 dias", fmtInt(g90)],["Vencem em até 30 dias", fmtInt(v30)]];
-          ks.forEach(function(k, ki){
-            var x = 0.4 + ki*3.15;
-            sl.addShape("rect", { x:x, y:y, w:3.0, h:0.95, fill:{ color:"F2F5FB" }, line:{ color:"C9D5EE", width:1 } });
-            sl.addText(k[0], { x:x+0.1, y:y+0.04, w:2.8, h:0.3, fontSize:11, color:"555555" });
-            sl.addText(k[1], { x:x+0.1, y:y+0.36, w:2.8, h:0.5, fontSize:22, bold:true, color:"0040A8" });
-          });
-          y = 2.2;
-        }
-        var body = pg.map(function(r, ri){
-          var d = vzDias(r), cor = d<=15?"2E7D32":d<=30?"C9A000":d<=45?"E07B00":d<=90?"D4380D":"B42318";
-          var f = { color: ri%2 ? "F7F9FD" : "FFFFFF" };
-          var o = function(al, ex){ var b = { fontSize:10.5, align:al, fill:f, color:"222222" }; for (var k in ex) b[k]=ex[k]; return b; };
-          return [
-            { text:r.base, options:o("left") }, { text:String(r.codigo), options:o("center") },
-            { text:String(r.descricao||""), options:o("left") }, { text:r.curva||"", options:o("center") },
-            { text:String(d), options:o("center", { bold:true, color:"FFFFFF", fill:{ color:cor } }) },
-            { text:(Math.round(r.qtd*100)/100).toLocaleString("pt-BR")+" "+(r.unit||""), options:o("right") },
-            { text:r.valor==null?"—":fmtBRL(r.valor), options:o("right") },
-            { text:r.proxVenc||"—", options:o("center") }
-          ];
-        });
-        sl.addTable([hdr].concat(body), { x:0.4, y:y, w:12.5, colW:[1.7,0.9,4.0,0.7,1.2,1.5,1.5,1.0], rowH:0.34, fontFace:"Calibri", border:{ type:"solid", color:"D9DFEC", pt:0.5 }, valign:"middle" });
-        var rod = "Página "+(pi+1)+" de "+pags.length+"  •  Gerado em "+new Date().toLocaleDateString("pt-BR")+(rows.length>MAXR && pi===pags.length-1 ? "  •  Exibindo os "+MAXR+" primeiros de "+rows.length+" — use o Excel para a lista completa" : "");
-        sl.addText(rod, { x:0.4, y:7.1, w:12.5, h:0.3, fontSize:10, color:"777777" });
+        sl.addText(sub, { x:0.4, y:0.56, w:12.5, h:0.32, fontSize:12, color:"DCE6FA", fontFace:"Calibri" });
+        sl.addImage({ data: cv.toDataURL("image/png").replace(/^data:/,""), x:0, y:1.05, w:13.333, h:6.3 });
+        sl.addText("Página "+(ci+1)+" de "+chunks.length+(full && ci===chunks.length-1 ? "  •  Exibindo os "+MAXR+" primeiros de "+rows.length+" — use o Excel para a lista completa" : ""), { x:0.4, y:7.2, w:12.5, h:0.25, fontSize:9, color:"777777" });
       });
       return pptx.write({ outputType:"blob" });
     }).then(function(blob){ done(); fdSalvarBlob(blob, "venda-zero-"+fdTs()+".pptx"); })
-    .catch(function(err){ done(); avisoTela("Erro ao montar o slide: "+(err && err.message || err)); });
+    .catch(function(err){ try{ host.remove(); }catch(e){} done(); avisoTela("Erro ao montar o slide: "+(err && err.message || err)); });
   }
   function vzDias(r){ return state.vzPuxada ? r.diasAjust : r.diasBruto; }
   function vzFiltrar(base, ignorarFaixa){
