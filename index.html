@@ -3345,7 +3345,7 @@
     var list = computeQuebraEstoquePicking(rows);
     renderFefoEpToolbar(list);
     renderFefoOcorrenciaPorEmbalagemChart("fefoEpPorEmbalagem", breakdownOriginalLimite(list, function(g){ return g.embalagem; }));
-    renderFefoBreakdownTable("fefoEpPorCurva", percentBreakdown(list, function(g){ return g.curva || "Sem curva"; }));
+    renderFefoOcorrenciaPorEmbalagemChart("fefoEpPorCurva", breakdownOriginalLimite(list, function(g){ return g.curva ? "Curva "+g.curva : "Sem curva"; }));
     if (!list.length){ host.innerHTML = '<div class="empty">Nenhum SKU com contagem em Produto Acabado e Picking ao mesmo tempo, nos filtros atuais.</div>'; return; }
     var filtered = filterFefoEpList(list);
     if (!filtered.length){ host.innerHTML = '<div class="empty">Nenhum SKU nesse status, nos filtros atuais.</div>'; return; }
