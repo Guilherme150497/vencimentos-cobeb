@@ -739,7 +739,7 @@
         </div>
 
         <div class="section-title" style="margin-top:24px;">Ocorrência Quebra de FEFO × % Quebra de FEFO</div>
-        <div class="section-sub">Original = qualquer diferença entre a validade do Estoque e a do Picking; Limite = diferença acima da tolerância da curva (é essa que conta como quebra de verdade). Tolerância já aplicada: Curva A até 7 dias não é quebra; Curva B e C, 0 dia (ajustável em Parâmetros). Barras = quantidade; linha = % de quebra (Limite ÷ total de itens).</div>
+        <div class="section-sub">Quebra de FEFO = diferença acima da tolerância da curva (Curva A até 7 dias não conta; B e C, 0 dia — ajustável em Parâmetros). Barras = quantidade de quebras; linha = % de quebra sobre os itens avaliados. Respeita os filtros de filial e curva.</div>
         <div class="filters-row" id="fefoTrendToolbar"></div>
         <div class="section-sub" style="font-weight:700; color:var(--text-primary); margin:10px 0 4px;">Por dia (cada importação semanal)</div>
         <div id="fefoOcorrenciaChartDia"></div>
@@ -1539,7 +1539,7 @@
   // vazio. Agora lê a contagem semanal nova (vencimentosContagem), a mesma fonte do resto da
   // Quebra de FEFO.
   function computeFefoOcorrenciaTrend(){
-    var docs = Object.keys(state.vencContagem).map(function(id){ return state.vencContagem[id]; });
+    var docs = Object.keys(state.vencContagem).map(function(id){ return state.vencContagem[id]; }).filter(function(d){ return state.fefoBase === "todas" || d.base === state.fefoBase; });
     var pontos = docs.map(function(doc){
       var rows = (doc.items||[]).reduce(function(acc, it){
         if (it.validadeSentinela || !it.validade) return acc;
@@ -1549,6 +1549,7 @@
         return acc;
       }, []);
       var ep = computeQuebraEstoquePicking(rows);
+      if (state.fefoCurvaFiltro !== "todas") ep = ep.filter(function(g){ return (g.curva||"—") === state.fefoCurvaFiltro; });
       var total = ep.length;
       var original = ep.filter(function(g){ return g.diffDias > 0; }).length;
       var limite = ep.filter(function(g){ return g.quebra; }).length;
@@ -3806,12 +3807,12 @@
     if (!host) return;
     if (!points.length){ host.innerHTML = '<div class="empty">Ainda não há importações suficientes pra calcular esse indicador.</div>'; return; }
     var n = points.length;
-    var maxCount = Math.max.apply(null, points.map(function(p){ return Math.max(p.original||0, p.limite||0); })) || 1;
+    var maxCount = Math.max.apply(null, points.map(function(p){ return (p.limite||0); })) || 1;
     var countTop = Math.max(1, Math.ceil(maxCount*1.25));
     var W = Math.max(760, n*170), H=340, padL=24, padR=24, padT=34, padB=38;
     var plotW = W-padL-padR, plotH = H-padT-padB;
     var groupW = plotW/n;
-    var barW = Math.min(46, groupW*0.28);
+    var barW = Math.min(70, groupW*0.38);
     function yCount(v){ return padT + plotH - (Math.max(0,v)/countTop*plotH); }
     function yPct(v){ return padT + plotH - (Math.max(0,Math.min(100,v))/100*plotH); }
     var svg = '<svg viewBox="0 0 '+W+' '+H+'" width="100%" style="max-width:'+Math.min(W,1100)+'px;height:auto;display:block;font-family:Inter,sans-serif;" role="img" aria-label="Ocorrência de quebra de FEFO">';
@@ -3824,12 +3825,10 @@
       var gx = padL + groupW*i;
       var cx = gx + groupW/2;
       var baseY = padT+plotH;
-      var x1 = cx - barW - 3, x2 = cx + 3;
-      var yOrig = yCount(p.original||0), yLim = yCount(p.limite||0);
-      svg += '<rect x="'+x1.toFixed(1)+'" y="'+yOrig.toFixed(1)+'" width="'+barW+'" height="'+Math.max(0,baseY-yOrig).toFixed(1)+'" rx="4" fill="var(--status-critical)"/>';
-      svg += '<text x="'+(x1+barW/2).toFixed(1)+'" y="'+(yOrig-8).toFixed(1)+'" font-size="15" font-weight="800" fill="var(--status-critical)" text-anchor="middle">'+fmtInt(p.original||0)+'</text>';
-      svg += '<rect x="'+x2.toFixed(1)+'" y="'+yLim.toFixed(1)+'" width="'+barW+'" height="'+Math.max(0,baseY-yLim).toFixed(1)+'" rx="4" fill="var(--accent)"/>';
-      svg += '<text x="'+(x2+barW/2).toFixed(1)+'" y="'+(yLim-8).toFixed(1)+'" font-size="15" font-weight="800" fill="var(--accent)" text-anchor="middle">'+fmtInt(p.limite||0)+'</text>';
+      var x2 = cx - barW/2;
+      var yLim = yCount(p.limite||0);
+      svg += '<rect x="'+x2.toFixed(1)+'" y="'+yLim.toFixed(1)+'" width="'+barW+'" height="'+Math.max(0,baseY-yLim).toFixed(1)+'" rx="4" fill="var(--status-critical)"/>';
+      svg += '<text x="'+(x2+barW/2).toFixed(1)+'" y="'+(yLim-8).toFixed(1)+'" font-size="15" font-weight="800" fill="var(--status-critical)" text-anchor="middle">'+fmtInt(p.limite||0)+'</text>';
       svg += '<text x="'+cx.toFixed(1)+'" y="'+(H-12)+'" font-size="13" font-weight="700" fill="var(--text-muted)" text-anchor="middle">'+esc(labelFn(p.label))+'</text>';
       linePts.push({ x:cx, y: p.pct==null ? null : yPct(p.pct), pct:p.pct });
     });
@@ -3843,8 +3842,7 @@
     });
     svg += '</svg>';
     var legend = '<div class="legend">' +
-      '<span class="legend-item"><span class="legend-dot" style="background:var(--status-critical)"></span>Quebra FEFO Original</span>' +
-      '<span class="legend-item"><span class="legend-dot" style="background:var(--accent)"></span>Quebra FEFO Limite</span>' +
+      '<span class="legend-item"><span class="legend-dot" style="background:var(--status-critical)"></span>Quebras de FEFO (quantidade)</span>' +
       '<span class="legend-item"><span class="legend-dot" style="background:var(--status-warning)"></span>% Quebra de FEFO</span>' +
     '</div>';
     host.innerHTML = '<div style="overflow-x:auto; max-width:1120px;">'+svg+'</div>' + legend;
@@ -3856,13 +3854,13 @@
   function renderFefoOcorrenciaPorEmbalagemChart(hostId, breakdown){
     var host = document.getElementById(hostId);
     if (!host) return;
-    breakdown = breakdown.filter(function(b){ return (b.original||0) > 0 || (b.limite||0) > 0; });
+    breakdown = breakdown.filter(function(b){ return (b.limite||0) > 0; });
     if (!breakdown.length){ host.innerHTML = '<div class="empty" style="padding:16px;">Nenhum item com ocorrência nos filtros atuais.</div>'; return; }
     breakdown = breakdown.slice().sort(function(x,y){ return (y.limite||0)-(x.limite||0) || (y.original||0)-(x.original||0); });
     var n = breakdown.length, totLim = breakdown.reduce(function(s,b){ return s+(b.limite||0); }, 0);
-    var maxV = Math.max.apply(null, breakdown.map(function(b){ return Math.max(b.original||0, b.limite||0); })) || 1, top = Math.ceil(maxV*1.2);
+    var maxV = Math.max.apply(null, breakdown.map(function(b){ return (b.limite||0); })) || 1, top = Math.ceil(maxV*1.2);
     var W = Math.max(720, n*96), H = 380, padL = 40, padR = 46, padT = 40, padB = 70;
-    var plotW = W-padL-padR, plotH = H-padT-padB, gW = plotW/n, bw = Math.min(34, gW*0.3);
+    var plotW = W-padL-padR, plotH = H-padT-padB, gW = plotW/n, bw = Math.min(54, gW*0.5);
     function yC(v){ return padT + plotH - (v/top*plotH); }
     function yP(v){ return padT + plotH - (v/100*plotH); }
     var svg = '<svg viewBox="0 0 '+W+' '+H+'" width="100%" style="max-width:'+Math.min(W,1100)+'px;height:auto;display:block;font-family:Inter,sans-serif;" role="img" aria-label="Pareto de quebra de FEFO">';
@@ -3873,12 +3871,10 @@
     });
     var acc = 0, pts = [];
     breakdown.forEach(function(b, i){
-      var cx = padL + gW*i + gW/2, base = padT+plotH, x1 = cx-bw-2, x2 = cx+2;
-      var yo = yC(b.original||0), yl = yC(b.limite||0);
-      svg += '<rect x="'+x1+'" y="'+yo+'" width="'+bw+'" height="'+Math.max(0,base-yo)+'" rx="4" fill="var(--status-critical)"/>';
-      svg += '<text x="'+(x1+bw/2)+'" y="'+(yo-6)+'" font-size="14" font-weight="800" fill="var(--status-critical)" text-anchor="middle">'+fmtInt(b.original||0)+'</text>';
-      svg += '<rect x="'+x2+'" y="'+yl+'" width="'+bw+'" height="'+Math.max(0,base-yl)+'" rx="4" fill="var(--accent)"/>';
-      svg += '<text x="'+(x2+bw/2)+'" y="'+(yl-6)+'" font-size="14" font-weight="800" fill="var(--accent)" text-anchor="middle">'+fmtInt(b.limite||0)+'</text>';
+      var cx = padL + gW*i + gW/2, base = padT+plotH, x2 = cx-bw/2;
+      var yl = yC(b.limite||0);
+      svg += '<rect x="'+x2+'" y="'+yl+'" width="'+bw+'" height="'+Math.max(0,base-yl)+'" rx="4" fill="var(--status-critical)"/>';
+      svg += '<text x="'+(x2+bw/2)+'" y="'+(yl-6)+'" font-size="14" font-weight="800" fill="var(--status-critical)" text-anchor="middle">'+fmtInt(b.limite||0)+'</text>';
       var lb = String(b.label); if (lb.length > 14) lb = lb.slice(0,13)+"…";
       svg += '<text transform="translate('+cx+','+(base+16)+') rotate(-28)" font-size="12.5" font-weight="700" fill="var(--text-primary)" text-anchor="end"><title>'+esc(b.label)+'</title>'+esc(lb)+'</text>';
       acc += (b.limite||0); pts.push({ x:cx, y:yP(totLim ? acc/totLim*100 : 0), v: totLim ? acc/totLim*100 : 0 });
@@ -3890,8 +3886,7 @@
     });
     svg += '</svg>';
     var legend = '<div class="legend" style="margin-bottom:6px;">' +
-      '<span class="legend-item"><span class="legend-dot" style="background:var(--status-critical)"></span>Quebra FEFO Original</span>' +
-      '<span class="legend-item"><span class="legend-dot" style="background:var(--accent)"></span>Quebra FEFO Limite</span>' +
+      '<span class="legend-item"><span class="legend-dot" style="background:var(--status-critical)"></span>Quebras de FEFO (quantidade)</span>' +
       '<span class="legend-item"><span class="legend-dot" style="background:var(--status-warning)"></span>% acumulado da Limite (Pareto)</span></div>';
     host.innerHTML = '<div style="overflow-x:auto; max-width:1120px;">' + legend + svg + '</div>';
   }
