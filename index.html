@@ -8356,8 +8356,10 @@
     var custosByBase = vencCustoMapByBase(vencActiveSnapshots("atual"));
     var groups = raw.map(function(r){ return { base:r.base, codigo:r.codigo, validade:r.validade, hl:r.hl }; });
     var fefoMap = fefoDepletionMap(groups, function(base, codigo){ return peVendaDiaMesAtualHl(base, codigo, vdPkDiario(base)); });
+    var curvaMapFd = buildCurvaRankingPeOficial();  // curva vem do cálculo da Curva ABC (venda da PE Oficial), não mais da planilha importada
     var rows = raw.map(function(r){
       var out = Object.assign({}, r);
+      out.curva = (curvaMapFd[r.base] && curvaMapFd[r.base][r.codigo]) || null;
       var p = effectiveParams(r.codigo);
       out.diasVencer = daysBetween(r.validade);
       out.qtdDisplay = out.isChopp ? (out.hl*100) : out.saldoCaixas;
