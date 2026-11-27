@@ -454,6 +454,8 @@
     <button class="tab-btn" data-tab="vendaZero">Venda Zero</button>
     <button class="tab-btn" data-tab="curvaAbc">Curva ABC</button>
     <button class="tab-btn" data-tab="curvaMkt">Market Place</button>
+    <button class="tab-btn" data-tab="ocOcupacao">Ocupação</button>
+    <button class="tab-btn" data-tab="ocImportar">Importar 02.05.02</button>
     <button class="tab-btn" data-tab="ocCapacidade">Capacidade</button>
     <button class="tab-btn" data-tab="ocMemoria">Memória de Cálculo</button>
     <button class="tab-btn" data-tab="usuarios">Usuários</button>
@@ -822,6 +824,21 @@
     </div>
   </section>
 
+  <section class="panel" id="panel-ocOcupacao">
+    <div class="card card-pad">
+      <div class="section-title">Ocupação de estoque — real × capacidade</div>
+      <div class="section-sub">Estoque diário da 02.05.02 convertido em paletes e HL e comparado com a capacidade de cada filial.</div>
+      <div id="ocOcupHost" style="margin-top:12px;"></div>
+    </div>
+  </section>
+
+  <section class="panel" id="panel-ocImportar">
+    <div class="card card-pad">
+      <div class="section-title">Importar relatório 02.05.02 (diário)</div>
+      <div id="ocImportHost" style="margin-top:8px;"></div>
+    </div>
+  </section>
+
   <section class="panel" id="panel-ocCapacidade">
     <div class="card card-pad">
       <div class="section-title">Capacidade do armazém</div>
@@ -1112,7 +1129,7 @@
     abastecimento: ["abastecimento", "politicaEstoque", "importacoes", "parametros"],
     vencimentos: ["farolVencimentos", "importVencimentos", "farolDiario", "quebraFefo", "vendaZero"],
     curvaabc: ["curvaAbc", "curvaMkt"],
-    ocupacao: ["ocCapacidade", "ocMemoria"],
+    ocupacao: ["ocOcupacao", "ocImportar", "ocCapacidade", "ocMemoria"],
     usuarios: ["usuarios"]
   };
   function moduloDaAba(tab){
@@ -8630,6 +8647,8 @@
     vendaZero: [function(){ if (typeof renderVendaZeroTab === "function") renderVendaZeroTab(); }],
     curvaAbc: [function(){ renderCurvaAbc("total"); }],
     curvaMkt: [function(){ renderCurvaAbc("mkt"); }],
+    ocOcupacao: [function(){ renderOcOcupacao(); }],
+    ocImportar: [function(){ renderOcImportar(); }],
     ocCapacidade: [function(){ renderOcCapacidade(); }],
     ocMemoria: [function(){ renderOcMemoria(); }],
     usuarios: [function(){ if (typeof usuariosRender === "function") usuariosRender(); }]
@@ -8686,8 +8705,12 @@
       scheduleRender();
     }, function(){});
     db.doc("config/ocupacaoParams").onSnapshot(function(snap){
-      if (snap.exists && snap.data() && snap.data().porBase) state.ocParams = snap.data().porBase;
+      if (snap.exists && snap.data()){ if (snap.data().porBase) state.ocParams = snap.data().porBase; if (snap.data().meta!=null) state.ocMeta = +snap.data().meta||80; }
       scheduleRender();
+    }, function(){});
+    db.collection("ocupacaoDia").onSnapshot(function(qs){
+      var map = {}; qs.docs.forEach(function(d){ var x = d.data(); x.id = d.id; map[d.id] = x; });
+      state.ocDias = map; scheduleRender();
     }, function(){});
     db.doc("config/fefoParams").onSnapshot(function(snap){
       if (snap.exists && snap.data()) state.fefoParams = Object.assign({}, DEFAULT_FEFO_PARAMS, snap.data());
@@ -9568,7 +9591,8 @@
       por[b] = { cap:v("cap"), A:v("A"), B:v("B"), C:v("C"), mesRef: sel ? sel.value : "" };
     });
     state.ocParams = por;
-    if (db) db.doc("config/ocupacaoParams").set({ porBase: por });
+    var mEl = document.getElementById("oc-meta"); state.ocMeta = mEl ? (parseFloat(mEl.value)||80) : state.ocMeta;
+    if (db) db.doc("config/ocupacaoParams").set({ porBase: por, meta: state.ocMeta });
     avisoTela("Parâmetros de capacidade salvos.");
     renderOcCapacidade();
   }
@@ -9585,7 +9609,7 @@
         ['cap:Capacidade total (paletes)','A:Curva A (paletes)','B:Curva B (paletes)','C:Curva C (paletes)'].map(function(s){ var k = s.split(":")[0]; return '<div class="field editable"><label>'+s.split(":")[1]+'</label><input type="number" min="0" step="1" id="oc-'+i+'-'+k+'" value="'+(p[k]||"")+'"></div>'; }).join("") +
         '<div class="field editable" style="grid-column:span 2; min-width:260px;"><label>Mês de referência do peso</label><select id="oc-'+i+'-mes">'+opts+'</select></div></div></div>';
     }).join("");
-    host.innerHTML = cards + '<div><button class="btn btn-primary btn-sm" id="ocSalvar">Salvar parâmetros</button> <span class="section-sub">Aderência do mix: quanto o mix de SKUs do mês se parece com o mix médio dos meses (100% = igual) — quanto maior, mais linear.</span></div>';
+    host.innerHTML = '<div class="card card-pad" style="margin-bottom:14px;"><div class="field editable" style="max-width:260px;"><label>Meta de ocupação (%)</label><input type="number" min="0" max="150" step="1" id="oc-meta" value="'+state.ocMeta+'"></div></div>' + cards + '<div><button class="btn btn-primary btn-sm" id="ocSalvar">Salvar parâmetros</button> <span class="section-sub">Aderência do mix: quanto o mix de SKUs do mês se parece com o mix médio dos meses (100% = igual) — quanto maior, mais linear.</span></div>';
     document.getElementById("ocSalvar").addEventListener("click", ocSalvar);
     // resultado
     var res = document.getElementById("ocResultado"); if (!res) return;
@@ -9621,10 +9645,204 @@
       (ok ? '<div class="table-wrap compact"><table><thead><tr><th>Curva</th><th class="num">Política total (pal)</th><th class="num">SKUs</th></tr></thead><tbody>'+OC_CURVAS.map(function(c){ return '<tr><td>'+c+'</td><td class="num tabular">'+fmtNum(C.porCurva[c].pal,1)+'</td><td class="num tabular">'+fmtInt(C.porCurva[c].n)+'</td></tr>'; }).join("")+'</tbody></table></div>' : '');
     var e4 = '<p>O peso é aplicado sobre a capacidade da curva e depois convertido em HL.</p>' + formula('Capacidade do SKU (paletes) = % peso na curva × Capacidade da curva') + formula('Capacidade do SKU (HL) = Capacidade (paletes) × caixas por palete × HL por caixa') +
       (ok && topo.length ? '<p class="section-sub">Exemplo com os 5 maiores SKUs desta filial:</p><div class="table-wrap compact"><table><thead><tr><th>Produto</th><th>Curva</th><th class="num">Política (pal)</th><th class="num">% peso</th><th class="num">Capacidade (pal)</th><th class="num">HL/palete</th><th class="num">Capacidade (HL)</th></tr></thead><tbody>'+topo.map(function(x){ return '<tr><td>'+esc(x.codigo+" · "+x.descricao)+'</td><td>'+x.curva+'</td><td class="num tabular">'+fmtNum(x.pal,1)+'</td><td class="num tabular">'+fmtNum(x.pesoCurva*100,2)+'%</td><td class="num tabular">'+fmtNum(x.capPal,1)+'</td><td class="num tabular">'+fmtNum(x.hlPal,2)+'</td><td class="num tabular"><b>'+fmtNum(x.capHl,1)+'</b></td></tr>'; }).join("")+'</tbody></table></div><p style="margin-top:8px;"><b>Capacidade total desta filial: '+fmtNum(C.capHl,0)+' HL</b> (soma de todos os SKUs).</p>' : '');
+    var e5 = '<p>O estoque real vem do relatório <b>02.05.02</b> extraído todo dia (um arquivo por filial e data). Vale a coluna <b>Disponível</b>, em caixas, ignorando as unidades soltas depois da barra (ex.: 3.722/07 = 3.722 caixas).</p>' + formula('Paletes reais = Σ (caixas do SKU ÷ caixas por palete)') + formula('HL real = Σ (caixas do SKU × HL por caixa)') + formula('% ocupação = Real do dia ÷ Capacidade da filial') + '<p>A ocupação do mês é a média dos dias importados; o acumulado do ano é a média de todos os dias do ano até o mês escolhido. Produtos Market Place ficam fora por padrão (a capacidade é calculada sem eles), mas dá para incluir na tela de Ocupação.</p>';
     var fluxo = ["Layout físico do armazém","Capacidade em paletes por filial e curva (Parâmetros)","Política de Estoque do mês de referência (paletes, nível Objetivo)","% de peso de cada SKU dentro da sua curva","Capacidade do SKU em paletes","Conversão para HL (caixas por palete × HL por caixa)","Capacidade total em HL × estoque real"];
-    host.innerHTML = '<div class="vz-grp" style="margin-bottom:6px;"><span class="t">Filial</span><div>'+pills+'</div></div>' + etapa(1,"Capacidade física do layout",e1) + etapa(2,"Distribuição da capacidade por curva",e2) + etapa(3,"Peso dos SKUs pela Política de Estoque",e3) + etapa(4,"Capacidade por SKU em paletes e HL",e4) +
+    host.innerHTML = '<div class="vz-grp" style="margin-bottom:6px;"><span class="t">Filial</span><div>'+pills+'</div></div>' + etapa(1,"Capacidade física do layout",e1) + etapa(2,"Distribuição da capacidade por curva",e2) + etapa(3,"Peso dos SKUs pela Política de Estoque",e3) + etapa(4,"Capacidade por SKU em paletes e HL",e4) + etapa(5,"Estoque real e % de ocupação",e5) +
       etapa("","Fluxo da memória de cálculo", fluxo.map(function(t,i){ return (i?'<div style="margin:2px 0 2px 14px; color:var(--text-muted);">↓</div>':'')+'<div style="font-weight:700;">'+t+'</div>'; }).join("")).replace("Etapa  – ","");
     Array.prototype.forEach.call(host.querySelectorAll("[data-ocm]"), function(b){ b.addEventListener("click", function(){ state.ocUi.memBase = b.getAttribute("data-ocm"); renderOcMemoria(); }); });
+  }
+
+  // ======================= Ocupação de Estoque: real (02.05.02 diário) =======================
+  state.ocDias = {}; state.ocMeta = 80; state.ocImp = { files: [] };
+  state.ocView = { base:"todas", ano:"", mes:"", metrica:"pal", mkt:false };
+  function ocIdDia(base, data){ return "oc_"+base.toLowerCase().replace(/[^a-z0-9]/g,"")+"_"+data; }
+  function ocDetectaData(nome){
+    var m = /(\d{4})[-_.](\d{2})[-_.](\d{2})/.exec(nome); if (m) return m[1]+"-"+m[2]+"-"+m[3];
+    m = /(\d{2})[-_.](\d{2})[-_.](\d{4})/.exec(nome); if (m) return m[3]+"-"+m[2]+"-"+m[1];
+    m = /(\d{2})(\d{2})(20\d{2})/.exec(nome); if (m) return m[3]+"-"+m[2]+"-"+m[1];
+    return "";
+  }
+  function ocDetectaBase(nome, sheet){
+    var b = matchBase(sheet); if (b) return b;
+    var n = normAddr(nome); for (var i=0;i<BASES.length;i++){ if (n.indexOf(normAddr(BASES[i]))>=0) return BASES[i]; }
+    return "";
+  }
+  // 02.05.02: D=Produto, E=Descricao, L(11)=Disponivel em CAIXAS ("1.010/01": vale só o que vem antes da barra).
+  function ocParseRelatorio(wb){
+    var nome = wb.SheetNames[0], rows = XLSX.utils.sheet_to_json(wb.Sheets[nome], { header:1, blankrows:false, defval:null }), items = [];
+    for (var i=1;i<rows.length;i++){
+      var r = rows[i]; if (!r) continue;
+      var c = normCodigoStr(r[3]), q = abastParseQtdCaixas(r[11]);
+      if (!c || q==null || q<=0) continue;
+      items.push({ c:c, q:q, d: r[4] ? String(r[4]).trim() : "" });
+    }
+    return { items:items, sheet:nome };
+  }
+  function ocImportarArquivos(fileList){
+    var arr = Array.prototype.slice.call(fileList||[]);
+    state.ocImp.files = [];
+    var pend = arr.length; if (!pend){ renderOcImportar(); return; }
+    arr.forEach(function(f, idx){
+      var rd = new FileReader();
+      rd.onload = function(e){
+        try{
+          var wb = XLSX.read(new Uint8Array(e.target.result), { type:"array" }), p = ocParseRelatorio(wb);
+          state.ocImp.files[idx] = { nome:f.name, items:p.items, base:ocDetectaBase(f.name, p.sheet), data:ocDetectaData(f.name) };
+        } catch(err){ state.ocImp.files[idx] = { nome:f.name, erro:err.message, items:[] }; }
+        if (--pend === 0){ state.ocImp.files = state.ocImp.files.filter(Boolean); renderOcImportar(); }
+      };
+      rd.readAsArrayBuffer(f);
+    });
+  }
+  function renderOcImportar(){
+    var host = document.getElementById("ocImportHost"); if (!host) return;
+    var fs = state.ocImp.files;
+    var prev = '';
+    if (fs.length){
+      prev = '<div class="table-wrap compact" style="margin-top:12px;"><table><thead><tr><th>Arquivo</th><th>Filial</th><th>Data do estoque</th><th class="num">Produtos</th><th class="num">Caixas</th></tr></thead><tbody>' +
+        fs.map(function(f, i){
+          if (f.erro) return '<tr><td>'+esc(f.nome)+'</td><td colspan="4"><span class="chip chip-critical">'+esc(f.erro)+'</span></td></tr>';
+          return '<tr><td>'+esc(f.nome)+'</td><td><div class="field editable" style="margin:0;"><select data-ocfb="'+i+'"><option value="">— filial —</option>'+BASES.map(function(b){ return '<option'+(f.base===b?" selected":"")+'>'+esc(b)+'</option>'; }).join("")+'</select></div></td>' +
+            '<td><div class="field editable" style="margin:0;"><input type="date" data-ocfd="'+i+'" value="'+esc(f.data)+'"></div></td><td class="num tabular">'+fmtInt(f.items.length)+'</td><td class="num tabular">'+fmtInt(f.items.reduce(function(s,x){ return s+x.q; },0))+'</td></tr>';
+        }).join("") + '</tbody></table></div><div style="margin-top:10px;"><button class="btn btn-primary btn-sm" id="ocConfirmaImp">Confirmar importação</button> <button class="btn btn-sm" id="ocCancelaImp">Cancelar</button> <span class="section-sub">Se o dia já existir para a filial, ele é substituído.</span></div>';
+    }
+    var dias = Object.keys(state.ocDias).map(function(k){ return state.ocDias[k]; }).sort(function(a,b){ return (b.data+b.base).localeCompare(a.data+a.base); });
+    var hist = dias.length ? '<div class="section-title" style="margin-top:20px;">Dias já importados ('+dias.length+')</div><div class="table-wrap compact" style="max-height:320px;"><table><thead><tr><th>Data</th><th>Filial</th><th>Arquivo</th><th class="num">Produtos</th><th></th></tr></thead><tbody>' +
+      dias.slice(0,120).map(function(d){ return '<tr><td class="tabular">'+fmtDate(d.data)+'</td><td>'+esc(d.base)+'</td><td>'+esc(d.sourceFileName||"—")+'</td><td class="num tabular">'+fmtInt((d.items||[]).length)+'</td><td><button class="btn btn-sm" data-ocdel="'+esc(d.id)+'">Excluir</button></td></tr>'; }).join("") + '</tbody></table></div>' : '<div class="section-sub" style="margin-top:14px;">Nenhum dia importado ainda.</div>';
+    host.innerHTML = '<div class="field editable" style="max-width:560px;"><label>Relatório 02.05.02 (um ou vários arquivos, um por dia e filial)</label><input type="file" id="ocFile" accept=".xlsx,.xls" multiple></div>' +
+      '<div class="section-sub">A data é lida do nome do arquivo (ex.: 02.05.02_Lagoa da Prata_2026-11-26.xlsx) e a filial do nome ou da aba. Dá para ajustar abaixo antes de confirmar.</div>' + prev + hist;
+    document.getElementById("ocFile").addEventListener("change", function(){ ocImportarArquivos(this.files); });
+    Array.prototype.forEach.call(host.querySelectorAll("[data-ocfb]"), function(s){ s.addEventListener("change", function(){ state.ocImp.files[+s.getAttribute("data-ocfb")].base = s.value; }); });
+    Array.prototype.forEach.call(host.querySelectorAll("[data-ocfd]"), function(s){ s.addEventListener("change", function(){ state.ocImp.files[+s.getAttribute("data-ocfd")].data = s.value; }); });
+    var bc = document.getElementById("ocConfirmaImp");
+    if (bc){
+      document.getElementById("ocCancelaImp").addEventListener("click", function(){ state.ocImp.files = []; renderOcImportar(); });
+      bc.addEventListener("click", function(){
+        var ok = fs.filter(function(f){ return !f.erro; }), falta = ok.filter(function(f){ return !f.base || !f.data; });
+        if (falta.length){ avisoTela("Preencha filial e data de todos os arquivos."); return; }
+        if (!db){ avisoTela("Sem conexão com o banco."); return; }
+        bc.disabled = true;
+        Promise.all(ok.map(function(f){
+          var id = ocIdDia(f.base, f.data);
+          return db.collection("ocupacaoDia").doc(id).set({ base:f.base, data:f.data, items:f.items, sourceFileName:f.nome, importedAt:new Date().toISOString() });
+        })).then(function(){ state.ocImp.files = []; avisoTela(ok.length+" dia(s) importado(s)."); renderOcImportar(); })
+          .catch(function(e){ bc.disabled = false; avisoTela("Erro ao salvar: "+(e && e.message || e)); });
+      });
+    }
+    Array.prototype.forEach.call(host.querySelectorAll("[data-ocdel]"), function(b){
+      b.addEventListener("click", function(){
+        if (b.getAttribute("data-arm") !== "1"){ b.setAttribute("data-arm","1"); b.textContent = "Confirmar exclusão"; setTimeout(function(){ if (b.isConnected){ b.removeAttribute("data-arm"); b.textContent = "Excluir"; } }, 4000); return; }
+        db.collection("ocupacaoDia").doc(b.getAttribute("data-ocdel")).delete();
+      });
+    });
+  }
+  // ---- cálculo do dia: caixas -> paletes (caixas ÷ caixas/palete) e HL (caixas × HL/caixa)
+  function ocDiaCalc(doc, curvaMap, mkt){
+    var t = { pal:0, hl:0, sku:0, semPal:[], porCurva:{ A:{pal:0,hl:0}, B:{pal:0,hl:0}, C:{pal:0,hl:0}, "—":{pal:0,hl:0} }, porEmb:{} };
+    (doc.items||[]).forEach(function(it){
+      if (!mkt && abastGrupoExcluido(it.c)) return;
+      var cat = state.peCatalogo[it.c] || {};
+      var pal = cat.caixasPorPallet>0 ? it.q/cat.caixasPorPallet : null, hl = cat.hlPorCaixa>0 ? it.q*cat.hlPorCaixa : null;
+      if (pal==null || hl==null){ t.semPal.push(it.c); if (pal==null && hl==null) return; }
+      t.sku++; if (pal!=null) t.pal += pal; if (hl!=null) t.hl += hl;
+      var cv = (curvaMap && curvaMap[it.c]) || "—", pc = t.porCurva[cv]; if (pal!=null) pc.pal += pal; if (hl!=null) pc.hl += hl;
+      var em = cat.embalagem || "Sem embalagem", pe = t.porEmb[em] || (t.porEmb[em] = { pal:0, hl:0 }); if (pal!=null) pe.pal += pal; if (hl!=null) pe.hl += hl;
+    });
+    return t;
+  }
+  function ocSerie(basesSel, mkt){
+    var curvas = buildCurvaRankingPeOficial(), caps = {};
+    BASES.forEach(function(b){ var C = ocCalc(b); caps[b] = { pal:C.p.cap, hl:C.capHl, porCurva:C.porCurva }; });
+    var porData = {};
+    Object.keys(state.ocDias).forEach(function(id){
+      var d = state.ocDias[id]; if (basesSel.indexOf(d.base)<0) return;
+      var c = ocDiaCalc(d, curvas[d.base]||{}, mkt), cp = caps[d.base];
+      var x = porData[d.data] || (porData[d.data] = { data:d.data, pal:0, hl:0, sku:0, capPal:0, capHl:0, porCurva:{ A:{pal:0,hl:0,capPal:0,capHl:0}, B:{pal:0,hl:0,capPal:0,capHl:0}, C:{pal:0,hl:0,capPal:0,capHl:0}, "—":{pal:0,hl:0,capPal:0,capHl:0} }, porEmb:{}, semPal:0 });
+      x.pal += c.pal; x.hl += c.hl; x.sku += c.sku; x.capPal += cp.pal; x.capHl += cp.hl; x.semPal += c.semPal.length;
+      Object.keys(c.porCurva).forEach(function(k){ x.porCurva[k].pal += c.porCurva[k].pal; x.porCurva[k].hl += c.porCurva[k].hl; if (cp.porCurva[k]){ x.porCurva[k].capPal += cp.porCurva[k].cap; x.porCurva[k].capHl += cp.porCurva[k].capHl; } });
+      Object.keys(c.porEmb).forEach(function(k){ var e = x.porEmb[k] || (x.porEmb[k] = { pal:0, hl:0 }); e.pal += c.porEmb[k].pal; e.hl += c.porEmb[k].hl; });
+    });
+    var arr = Object.keys(porData).sort().map(function(k){ var x = porData[k]; x.pctPal = x.capPal>0 ? x.pal/x.capPal*100 : null; x.pctHl = x.capHl>0 ? x.hl/x.capHl*100 : null; return x; });
+    return arr;
+  }
+  function ocSvg(cfg){
+    var n = cfg.labels.length, W = Math.max(760, n*cfg.minBar), H = cfg.h||300, pl = 46, pr = 20, pt = 30, pb = 34, pw = W-pl-pr, ph = H-pt-pb, gW = pw/n, bw = Math.min(46, gW*0.62);
+    var vals = (cfg.bars||[]).concat(cfg.line||[]).concat(cfg.line2||[]).concat(cfg.meta!=null?[cfg.meta]:[]).filter(function(v){ return v!=null; });
+    var mx = Math.max.apply(null, vals.concat([1]))*1.15;
+    function y(v){ return pt + ph - Math.max(0,v)/mx*ph; }
+    var s = '<svg viewBox="0 0 '+W+' '+H+'" width="100%" style="display:block;font-family:Inter,sans-serif;max-width:1150px;">';
+    for (var g=0; g<=4; g++){ var gv = mx*g/4; s += '<line x1="'+pl+'" x2="'+(W-pr)+'" y1="'+y(gv)+'" y2="'+y(gv)+'" stroke="var(--gridline)"/><text x="'+(pl-6)+'" y="'+(y(gv)+4)+'" font-size="11" text-anchor="end" fill="var(--text-muted)">'+cfg.fmtAxis(gv)+'</text>'; }
+    if (cfg.bars) cfg.bars.forEach(function(v,i){ if (v==null) return; var cx = pl+gW*i+gW/2; s += '<rect x="'+(cx-bw/2)+'" y="'+y(v)+'" width="'+bw+'" height="'+Math.max(0,pt+ph-y(v))+'" rx="4" fill="'+cfg.barColor(v)+'"/><text x="'+cx+'" y="'+(y(v)-6)+'" font-size="'+(n>20?10:13)+'" font-weight="800" text-anchor="middle" fill="var(--text-primary)">'+cfg.fmtVal(v)+'</text>'; });
+    function path(arr, col, w, dash){ var d = "", pts = []; arr.forEach(function(v,i){ if (v==null) return; var cx = pl+gW*i+gW/2; d += (d?" L ":"M ")+cx.toFixed(1)+" "+y(v).toFixed(1); pts.push([cx,v]); }); if (!d) return ""; var o = '<path d="'+d+'" fill="none" stroke="'+col+'" stroke-width="'+w+'"'+(dash?' stroke-dasharray="'+dash+'"':'')+'/>'; if (!dash) pts.forEach(function(p){ o += '<circle cx="'+p[0].toFixed(1)+'" cy="'+y(p[1]).toFixed(1)+'" r="4.5" fill="'+col+'" stroke="#fff" stroke-width="1.5"/>'+(cfg.lineLabels?'<text x="'+p[0].toFixed(1)+'" y="'+(y(p[1])-10).toFixed(1)+'" font-size="11" font-weight="800" text-anchor="middle" fill="'+col+'">'+cfg.fmtVal(p[1])+'</text>':''); }); return o; }
+    if (cfg.line) s += path(cfg.line, cfg.lineColor||"#2f6fd6", 3);
+    if (cfg.line2) s += path(cfg.line2, cfg.line2Color||"#7a4bd1", 3);
+    if (cfg.meta!=null) s += '<line x1="'+pl+'" x2="'+(W-pr)+'" y1="'+y(cfg.meta)+'" y2="'+y(cfg.meta)+'" stroke="#2e9e5a" stroke-width="2" stroke-dasharray="6 4"/><text x="'+(W-pr)+'" y="'+(y(cfg.meta)-5)+'" font-size="11" font-weight="800" text-anchor="end" fill="#2e9e5a">'+(cfg.metaLabel||"")+'</text>';
+    cfg.labels.forEach(function(l,i){ var cx = pl+gW*i+gW/2; if (n>24 && i%2) return; s += '<text x="'+cx+'" y="'+(H-10)+'" font-size="11" text-anchor="middle" fill="var(--text-muted)">'+esc(l)+'</text>'; });
+    return s + '</svg>';
+  }
+  function renderOcOcupacao(){
+    var host = document.getElementById("ocOcupHost"); if (!host) return;
+    var V = state.ocView, bs = V.base==="todas" ? BASES : [V.base], met = V.metrica, un = met==="pal" ? "paletes" : "HL";
+    var serie = ocSerie(bs, V.mkt);
+    function pct(x){ return met==="pal" ? x.pctPal : x.pctHl; }
+    function real(x){ return met==="pal" ? x.pal : x.hl; }
+    function cap(x){ return met==="pal" ? x.capPal : x.capHl; }
+    var anos = Object.keys(serie.reduce(function(o,x){ o[x.data.slice(0,4)] = 1; return o; }, {})).sort();
+    if (!anos.length){ host.innerHTML = '<div class="empty">Nenhum dia importado ainda. Vá em "Importar 02.05.02" e suba o relatório diário.</div>'; return; }
+    if (anos.indexOf(V.ano)<0) V.ano = anos[anos.length-1];
+    var doAno = serie.filter(function(x){ return x.data.slice(0,4)===V.ano; });
+    var meses = Object.keys(doAno.reduce(function(o,x){ o[x.data.slice(0,7)] = 1; return o; }, {})).sort();
+    if (meses.indexOf(V.mes)<0) V.mes = meses[meses.length-1];
+    var doMes = doAno.filter(function(x){ return x.data.slice(0,7)===V.mes; });
+    function pill(attr, v, l, on){ return '<button class="pill'+(on?" active":"")+'" '+attr+'="'+esc(v)+'">'+esc(l)+'</button>'; }
+    function grp(t, inner){ return '<div class="vz-grp"><span class="t">'+t+'</span><div>'+inner+'</div></div>'; }
+    var fil = '<div style="display:flex; gap:20px; flex-wrap:wrap; align-items:flex-end;">' +
+      grp("Filial", ["todas"].concat(BASES).map(function(b){ return pill("data-ocvb", b, b==="todas"?"Todas as filiais":b, V.base===b); }).join("")) +
+      grp("Métrica", pill("data-ocvm","pal","Paletes",met==="pal")+pill("data-ocvm","hl","Hecto (HL)",met==="hl")) +
+      grp("Market Place", pill("data-ocvk","0","Fora",!V.mkt)+pill("data-ocvk","1","Incluir",V.mkt)) +
+      grp("Ano", '<div class="field editable" style="margin:0;"><select id="ocvAno">'+anos.map(function(a){ return '<option'+(a===V.ano?" selected":"")+'>'+a+'</option>'; }).join("")+'</select></div>') +
+      grp("Mês", '<div class="field editable" style="margin:0;"><select id="ocvMes">'+meses.map(function(m){ return '<option value="'+m+'"'+(m===V.mes?" selected":"")+'>'+abastPeriodoLabel(m)+'</option>'; }).join("")+'</select></div>') +
+      '<span style="flex:1"></span><button class="btn btn-sm" id="ocvExp">⬇ Exportar Excel</button></div>';
+    var meta = state.ocMeta || 80;
+    function media(a){ var v = a.map(pct).filter(function(x){ return x!=null; }); return v.length ? v.reduce(function(s,x){ return s+x; },0)/v.length : null; }
+    var mediaMes = media(doMes), mediaAno = media(doAno.filter(function(x){ return x.data.slice(0,7)<=V.mes; }));
+    var picoMes = doMes.reduce(function(m,x){ return Math.max(m, real(x)); }, 0);
+    var mediaReal = doMes.length ? doMes.reduce(function(s,x){ return s+real(x); },0)/doMes.length : 0, mediaCap = doMes.length ? doMes.reduce(function(s,x){ return s+cap(x); },0)/doMes.length : 0;
+    var ult = doMes[doMes.length-1], semPal = doMes.reduce(function(m,x){ return Math.max(m,x.semPal); },0);
+    function tone(p){ return p==null ? "" : (p>100 ? "critical" : (p>meta ? "warning" : "good")); }
+    function kpi(l,v,s,t){ return '<div class="kpi'+(t?" tone-"+t:"")+'"><div class="label">'+esc(l)+'</div><div class="value tabular">'+v+'</div>'+(s?'<div class="sub">'+esc(s)+'</div>':'')+'</div>'; }
+    function f1(v){ return v==null ? "—" : fmtNum(v,1)+"%"; }
+    var kp = '<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); margin-top:14px;">' +
+      kpi("Ocupação média do mês", f1(mediaMes), abastPeriodoLabel(V.mes), tone(mediaMes)) + kpi("Acumulado do ano", f1(mediaAno), "média até "+abastPeriodoLabel(V.mes), tone(mediaAno)) +
+      kpi("Meta de ocupação", fmtNum(meta,0)+"%", "parâmetro") + kpi("Capacidade", fmtNum(mediaCap,0), un) + kpi((met==="pal"?"Palete":"HL")+" médio", fmtNum(mediaReal,0), "média dos dias") + kpi((met==="pal"?"Palete":"HL")+" máximo", fmtNum(picoMes,0), "pico no mês") +
+      kpi("Último dia", ult ? f1(pct(ult)) : "—", ult ? fmtDate(ult.data) : "", ult ? tone(pct(ult)) : "") + kpi("SKUs (último dia)", ult ? fmtInt(ult.sku) : "—", semPal ? semPal+" sem palete/HL no catálogo" : "todos convertidos", semPal ? "warning" : "good") + '</div>';
+    var ms = meses.map(function(m){ var a = doAno.filter(function(x){ return x.data.slice(0,7)===m; }); return { m:m, v:media(a) }; });
+    var acc = meses.map(function(m){ return media(doAno.filter(function(x){ return x.data.slice(0,7)<=m; })); });
+    var colr = function(v){ return v>100 ? "#d64545" : (v>meta ? "#e0a800" : "#2f6fd6"); };
+    var c1 = ocSvg({ labels: ms.map(function(x){ return abastPeriodoLabel(x.m).slice(0,3); }), bars: ms.map(function(x){ return x.v; }), line: acc, lineColor:"#7a4bd1", lineLabels:false, meta:meta, metaLabel:"Meta "+fmtNum(meta,0)+"%", minBar:90, barColor:colr, fmtVal:function(v){ return fmtNum(v,1)+"%"; }, fmtAxis:function(v){ return fmtNum(v,0)+"%"; } });
+    var c2 = ocSvg({ labels: doMes.map(function(x){ return x.data.slice(8)+"/"+x.data.slice(5,7); }), bars: doMes.map(pct), meta:meta, metaLabel:"Meta "+fmtNum(meta,0)+"%", minBar:44, barColor:colr, fmtVal:function(v){ return fmtNum(v,0)+"%"; }, fmtAxis:function(v){ return fmtNum(v,0)+"%"; } });
+    var c3 = ocSvg({ labels: doMes.map(function(x){ return x.data.slice(8)+"/"+x.data.slice(5,7); }), line: doMes.map(real), line2: doMes.map(cap), lineColor:"#e07b00", line2Color:"#2e9e5a", lineLabels:n(doMes)<=16, minBar:44, fmtVal:function(v){ return fmtNum(v,0); }, fmtAxis:function(v){ return fmtNum(v,0); } });
+    function n(a){ return a.length; }
+    // por curva e por embalagem (média dos dias do mês)
+    var dm = doMes.length||1, curvaRows = ["A","B","C"].map(function(c){ var r = doMes.reduce(function(s,x){ return s+(met==="pal"?x.porCurva[c].pal:x.porCurva[c].hl); },0)/dm, k = doMes.reduce(function(s,x){ return s+(met==="pal"?x.porCurva[c].capPal:x.porCurva[c].capHl); },0)/dm; return { c:c, r:r, k:k, p:k>0?r/k*100:null }; });
+    var emb = {}; doMes.forEach(function(x){ Object.keys(x.porEmb).forEach(function(e){ var o = emb[e] || (emb[e] = { pal:0, hl:0 }); o.pal += x.porEmb[e].pal/dm; o.hl += x.porEmb[e].hl/dm; }); });
+    var embArr = Object.keys(emb).map(function(e){ return { e:e, pal:emb[e].pal, hl:emb[e].hl }; }).sort(function(a,b){ return (met==="pal"?b.pal-a.pal:b.hl-a.hl); });
+    var totE = embArr.reduce(function(s,x){ return s+(met==="pal"?x.pal:x.hl); },0)||1;
+    var tCurva = '<div class="table-wrap compact"><table><thead><tr><th>Curva</th><th class="num">Real ('+un+')</th><th class="num">Capacidade</th><th class="num">% ocupação</th></tr></thead><tbody>'+curvaRows.map(function(x){ return '<tr><td><b>'+x.c+'</b></td><td class="num tabular">'+fmtNum(x.r,0)+'</td><td class="num tabular">'+fmtNum(x.k,0)+'</td><td class="num tabular" style="font-weight:800; color:'+(x.p==null?"inherit":colr(x.p))+';">'+f1(x.p)+'</td></tr>'; }).join("")+'</tbody></table></div>';
+    var tEmb = '<div class="table-wrap compact" style="max-height:420px;"><table><thead><tr><th>Embalagem</th><th class="num">Paletes</th><th class="num">HL</th><th class="num">% do estoque</th></tr></thead><tbody>'+embArr.map(function(x){ var v = met==="pal"?x.pal:x.hl; return '<tr><td>'+esc(x.e)+'</td><td class="num tabular">'+fmtNum(x.pal,0)+'</td><td class="num tabular">'+fmtNum(x.hl,0)+'</td><td><div style="display:flex; align-items:center; gap:8px;"><span class="tabular" style="min-width:44px;">'+fmtNum(v/totE*100,1)+'%</span><div class="vz-bar" style="flex:1;"><i style="width:'+(v/totE*100).toFixed(0)+'%; background:#2f6fd6;"></i></div></div></td></tr>'; }).join("")+'</tbody></table></div>';
+    var tDia = '<div class="table-wrap compact" style="max-height:360px;"><table><thead><tr><th>Data</th><th class="num">Paletes</th><th class="num">% palete</th><th class="num">HL</th><th class="num">% HL</th><th class="num">SKUs</th></tr></thead><tbody>'+doMes.map(function(x){ return '<tr><td class="tabular">'+fmtDate(x.data)+'</td><td class="num tabular">'+fmtNum(x.pal,0)+'</td><td class="num tabular" style="font-weight:700;">'+f1(x.pctPal)+'</td><td class="num tabular">'+fmtNum(x.hl,0)+'</td><td class="num tabular" style="font-weight:700;">'+f1(x.pctHl)+'</td><td class="num tabular">'+fmtInt(x.sku)+'</td></tr>'; }).join("")+'</tbody></table></div>';
+    function secao(t, h){ return '<div class="section-title" style="margin:20px 0 6px;">'+t+'</div>'+h; }
+    host.innerHTML = fil + kp + secao("% de ocupação por mês — "+V.ano+" (barras = média do mês · linha roxa = acumulado do ano)", c1) + secao("% de ocupação dia a dia — "+abastPeriodoLabel(V.mes), c2) + secao((met==="pal"?"Paletes":"HL")+" por dia × capacidade (linha verde)", c3) +
+      '<div class="grid-2" style="margin-top:20px; align-items:start;"><div><div class="section-title">Ocupação por curva (média do mês)</div>'+tCurva+'</div><div><div class="section-title">Estoque por embalagem (média do mês)</div>'+tEmb+'</div></div>' + secao("Dia a dia", tDia) +
+      '<div class="section-sub" style="margin-top:8px;">Estoque real = coluna Disponível da 02.05.02 (caixas, sem unidades soltas), convertido em paletes (÷ caixas por palete) e HL (× HL por caixa). Ocupação = real ÷ capacidade da filial. Azul até a meta, amarelo da meta a 100%, vermelho acima de 100%.</div>';
+    Array.prototype.forEach.call(host.querySelectorAll("[data-ocvb]"), function(b){ b.addEventListener("click", function(){ V.base = b.getAttribute("data-ocvb"); renderOcOcupacao(); }); });
+    Array.prototype.forEach.call(host.querySelectorAll("[data-ocvm]"), function(b){ b.addEventListener("click", function(){ V.metrica = b.getAttribute("data-ocvm"); renderOcOcupacao(); }); });
+    Array.prototype.forEach.call(host.querySelectorAll("[data-ocvk]"), function(b){ b.addEventListener("click", function(){ V.mkt = b.getAttribute("data-ocvk")==="1"; renderOcOcupacao(); }); });
+    document.getElementById("ocvAno").addEventListener("change", function(){ V.ano = this.value; V.mes = ""; renderOcOcupacao(); });
+    document.getElementById("ocvMes").addEventListener("change", function(){ V.mes = this.value; renderOcOcupacao(); });
+    document.getElementById("ocvExp").addEventListener("click", function(){
+      exportRows(serie.map(function(x){ return { "Data":x.data, "Paletes":Math.round(x.pal*10)/10, "Capacidade (pal)":Math.round(x.capPal), "% ocupação palete":x.pctPal==null?"":Math.round(x.pctPal*10)/10, "HL":Math.round(x.hl*10)/10, "Capacidade (HL)":Math.round(x.capHl), "% ocupação HL":x.pctHl==null?"":Math.round(x.pctHl*10)/10, "SKUs":x.sku }; }), "ocupacao_estoque_"+todayISO()+".xlsx", "Ocupação", [{wch:12},{wch:10},{wch:14},{wch:16},{wch:10},{wch:14},{wch:14},{wch:8}]);
+    });
   }
 
   async function boot(){
