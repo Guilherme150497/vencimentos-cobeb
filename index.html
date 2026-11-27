@@ -411,6 +411,11 @@
         <h3 style="color:#5b2fa8;">Curva ABC</h3>
         <p>Curva ABC por hecto — estoque total e Market Place, mês a mês</p>
       </button>
+      <button type="button" class="hub-card" data-hubmod="ocupacao">
+        <div class="hub-ico" style="background:#e3f4f4;">🏭</div>
+        <h3 style="color:#0b6b6b;">Ocupação de Estoque</h3>
+        <p>Capacidade do armazém por filial e curva (paletes e HL) × estoque real</p>
+      </button>
       <button type="button" class="hub-card" data-hubmod="usuarios" id="hubCardUsuarios" style="display:none;">
         <div class="hub-ico" style="background:#e8f6ee;">👥</div>
         <h3 style="color:#177245;">Usuários</h3>
@@ -433,6 +438,7 @@
     <button class="module-btn" data-modulo="abastecimento">📦 Abastecimento &amp; Estoque</button>
     <button class="module-btn active" data-modulo="vencimentos">⏳ Vencimentos &amp; FEFO</button>
     <button class="module-btn" data-modulo="curvaabc">📊 Curva ABC</button>
+    <button class="module-btn" data-modulo="ocupacao">🏭 Ocupação de Estoque</button>
     <button class="module-btn" data-modulo="usuarios" id="btnModUsuarios" style="display:none;">👥 Usuários</button>
     <span class="user-chip" id="userChip"></span>
   </div>
@@ -448,6 +454,8 @@
     <button class="tab-btn" data-tab="vendaZero">Venda Zero</button>
     <button class="tab-btn" data-tab="curvaAbc">Curva ABC</button>
     <button class="tab-btn" data-tab="curvaMkt">Market Place</button>
+    <button class="tab-btn" data-tab="ocCapacidade">Capacidade</button>
+    <button class="tab-btn" data-tab="ocMemoria">Memória de Cálculo</button>
     <button class="tab-btn" data-tab="usuarios">Usuários</button>
   </div>
 </div>
@@ -814,6 +822,22 @@
     </div>
   </section>
 
+  <section class="panel" id="panel-ocCapacidade">
+    <div class="card card-pad">
+      <div class="section-title">Capacidade do armazém</div>
+      <div class="section-sub">Informe, por filial, a capacidade em paletes (total e por curva) e o mês de referência para o peso dos SKUs. A capacidade em HL é calculada a partir da Política de Estoque.</div>
+      <div id="ocParamsHost" style="margin-top:12px;"></div>
+      <div id="ocResultado" style="margin-top:18px;"></div>
+    </div>
+  </section>
+
+  <section class="panel" id="panel-ocMemoria">
+    <div class="card card-pad">
+      <div class="section-title" style="font-size:20px;">Memória de cálculo da capacidade de estoque</div>
+      <div id="ocMemoriaHost"></div>
+    </div>
+  </section>
+
   <section class="panel" id="panel-vendaZero">
     <div class="card card-pad">
       <div class="section-title">Venda Zero — produtos com saldo e sem vender</div>
@@ -1088,6 +1112,7 @@
     abastecimento: ["abastecimento", "politicaEstoque", "importacoes", "parametros"],
     vencimentos: ["farolVencimentos", "importVencimentos", "farolDiario", "quebraFefo", "vendaZero"],
     curvaabc: ["curvaAbc", "curvaMkt"],
+    ocupacao: ["ocCapacidade", "ocMemoria"],
     usuarios: ["usuarios"]
   };
   function moduloDaAba(tab){
@@ -8605,6 +8630,8 @@
     vendaZero: [function(){ if (typeof renderVendaZeroTab === "function") renderVendaZeroTab(); }],
     curvaAbc: [function(){ renderCurvaAbc("total"); }],
     curvaMkt: [function(){ renderCurvaAbc("mkt"); }],
+    ocCapacidade: [function(){ renderOcCapacidade(); }],
+    ocMemoria: [function(){ renderOcMemoria(); }],
     usuarios: [function(){ if (typeof usuariosRender === "function") usuariosRender(); }]
   };
   function renderAll(){
@@ -8656,6 +8683,10 @@
     }, function(){});
     db.doc("config/riskThresholds").onSnapshot(function(snap){
       if (snap.exists && snap.data()) state.thresholds = Object.assign({}, DEFAULT_THRESHOLDS, snap.data());
+      scheduleRender();
+    }, function(){});
+    db.doc("config/ocupacaoParams").onSnapshot(function(snap){
+      if (snap.exists && snap.data() && snap.data().porBase) state.ocParams = snap.data().porBase;
       scheduleRender();
     }, function(){});
     db.doc("config/fefoParams").onSnapshot(function(snap){
@@ -9477,6 +9508,123 @@
       exportRows(rows.map(function(x){ var o = { "Posição":x.pos, "Código":x.codigo, "Produto":x.descricao, "Embalagem":x.emb, "Market Place":x.mkt?"Sim":"", "Curva":x.curva, "Hecto":Math.round(x.hl*100)/100, "Hecto/dia":Math.round(x.hl/data.dias*100)/100, "% do total":Math.round(x.pct*100)/100, "% acumulado":Math.round(x.acum*100)/100 }; data.meses.forEach(function(m){ o[caMesLbl(m)] = x.cm[m]||""; }); return o; }),
         "curva_abc_"+(scope==="mkt"?"marketplace_":"")+todayISO()+".xlsx", "Curva ABC", [{wch:8},{wch:9},{wch:44},{wch:16},{wch:12},{wch:7},{wch:11},{wch:11},{wch:10},{wch:11}]);
     });
+  }
+
+  // ======================= Ocupação de Estoque: capacidade do armazém =======================
+  // Capacidade (paletes) por filial e por curva -> distribuída entre os SKUs pelo peso da Política de
+  // Estoque em paletes (mês de referência fixo) -> convertida em HL (HL por palete de cada SKU).
+  state.ocParams = {}; state.ocUi = { base: BASES[0], memBase: BASES[0] };
+  var OC_CURVAS = ["A","B","C"];
+  function ocP(base){ var p = state.ocParams[base] || {}; return { cap: +p.cap||0, A: +p.A||0, B: +p.B||0, C: +p.C||0, mesRef: p.mesRef || "" }; }
+  function ocPalMes(base, mes){
+    var curvaMap = buildCurvaRankingPeOficial()[base] || {}, out = [];
+    peListaCodigos(base).forEach(function(cod){
+      var r = peCalcularPolitica(base, cod, mes), cat = state.peCatalogo[cod] || {};
+      var hlPal = (cat.hlPorCaixa>0 && cat.caixasPorPallet>0) ? cat.hlPorCaixa*cat.caixasPorPallet : null;
+      out.push({ codigo:cod, descricao:r.descricao||cat.descricao||"", curva:curvaMap[cod]||null, pal:(r.objetivoPaletes>0 ? r.objetivoPaletes : 0), hlPal:hlPal, cxPal:cat.caixasPorPallet||null, hlCx:cat.hlPorCaixa||null, objetivoHl:r.objetivoHl, motivo: r.objetivoHl==null ? "sem lead time / venda projetada" : (hlPal==null ? "sem paletização no catálogo" : (!curvaMap[cod] ? "sem curva" : "")) });
+    });
+    return out;
+  }
+  // Aderência do mix do mês ao mix médio dos meses disponíveis (100% = mês idêntico à média): 1 - 1/2 * soma|peso_mês - peso_médio|
+  var __ocAderCache = {};
+  function ocAderencia(base){
+    var meses = peMesesAlvoDisponiveis(), key = base+"|"+meses.join(",")+"|"+Object.keys(state.peVendaPorBase[base]&&state.peVendaPorBase[base].porCodigo||{}).length;
+    if (__ocAderCache[key]) return __ocAderCache[key];
+    var pesos = {}, cods = {}, vol = {};
+    meses.forEach(function(m){
+      var l = ocPalMes(base, m).filter(function(x){ return x.pal>0 && x.hlPal; }), t = l.reduce(function(s,x){ return s+x.pal; },0);
+      pesos[m] = {}; vol[m] = peVolumePlanejadoDe(base, m);
+      l.forEach(function(x){ pesos[m][x.codigo] = t ? x.pal/t : 0; cods[x.codigo] = true; });
+    });
+    var ativos = meses.filter(function(m){ return Object.keys(pesos[m]).length; }), res = {};
+    ativos.forEach(function(m){
+      var d = 0;
+      Object.keys(cods).forEach(function(c){ var med = ativos.reduce(function(s,k){ return s+(pesos[k][c]||0); },0)/ativos.length; d += Math.abs((pesos[m][c]||0)-med); });
+      res[m] = { aderencia: (1-d/2)*100, vol: vol[m] };
+    });
+    return (__ocAderCache[key] = res);
+  }
+  function ocCalc(base){
+    var p = ocP(base), l = p.mesRef ? ocPalMes(base, p.mesRef) : [];
+    var validos = l.filter(function(x){ return x.pal>0 && x.hlPal && x.curva; });
+    var semDados = l.filter(function(x){ return !(x.pal>0 && x.hlPal && x.curva); });
+    var somaCurva = { A:0, B:0, C:0 }; validos.forEach(function(x){ somaCurva[x.curva] += x.pal; });
+    var porCurva = {};
+    OC_CURVAS.forEach(function(c){ porCurva[c] = { cap:p[c], pal:somaCurva[c], n:0, capHl:0 }; });
+    validos.forEach(function(x){
+      x.pesoCurva = somaCurva[x.curva] ? x.pal/somaCurva[x.curva] : 0;
+      x.capPal = x.pesoCurva * p[x.curva];
+      x.capHl = x.capPal * x.hlPal;
+      porCurva[x.curva].n++; porCurva[x.curva].capHl += x.capHl;
+    });
+    var capHl = OC_CURVAS.reduce(function(s,c){ return s+porCurva[c].capHl; },0);
+    return { p:p, validos:validos.sort(function(a,b){ return b.capHl-a.capHl; }), semDados:semDados, porCurva:porCurva, capHl:capHl, somaCurvas:p.A+p.B+p.C };
+  }
+  function ocSalvar(){
+    var por = {};
+    BASES.forEach(function(b, i){
+      function v(k){ var el = document.getElementById("oc-"+i+"-"+k); return el ? (parseFloat(el.value)||0) : 0; }
+      var sel = document.getElementById("oc-"+i+"-mes");
+      por[b] = { cap:v("cap"), A:v("A"), B:v("B"), C:v("C"), mesRef: sel ? sel.value : "" };
+    });
+    state.ocParams = por;
+    if (db) db.doc("config/ocupacaoParams").set({ porBase: por });
+    avisoTela("Parâmetros de capacidade salvos.");
+    renderOcCapacidade();
+  }
+  function renderOcCapacidade(){
+    var host = document.getElementById("ocParamsHost"); if (!host) return;
+    var meses = peMesesAlvoDisponiveis();
+    var cards = BASES.map(function(b, i){
+      var p = ocP(b), ad = meses.length ? ocAderencia(b) : {};
+      var opts = '<option value="">— escolha —</option>' + meses.filter(function(m){ return ad[m] || p.mesRef===m; }).map(function(m){ var a = ad[m]; return '<option value="'+m+'"'+(p.mesRef===m?" selected":"")+'>'+abastPeriodoLabel(m)+(a?' · aderência do mix '+fmtNum(a.aderencia,0)+'%':'')+'</option>'; }).join("");
+      var dif = p.cap - (p.A+p.B+p.C), ok = p.cap>0 && Math.abs(dif) < 0.5;
+      var badge = p.cap>0 ? (ok ? '<span class="chip chip-good">Curvas somam o total</span>' : '<span class="chip chip-warning">Curvas somam '+fmtInt(p.A+p.B+p.C)+' · diferença '+fmtInt(dif)+' pal</span>') : '';
+      return '<div class="card card-pad" style="margin-bottom:14px;"><div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;"><div class="section-title" style="margin:0;">'+esc(b)+'</div>'+badge+'</div>' +
+        '<div class="form-grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); margin-top:10px;">' +
+        ['cap:Capacidade total (paletes)','A:Curva A (paletes)','B:Curva B (paletes)','C:Curva C (paletes)'].map(function(s){ var k = s.split(":")[0]; return '<div class="field editable"><label>'+s.split(":")[1]+'</label><input type="number" min="0" step="1" id="oc-'+i+'-'+k+'" value="'+(p[k]||"")+'"></div>'; }).join("") +
+        '<div class="field editable" style="grid-column:span 2; min-width:260px;"><label>Mês de referência do peso</label><select id="oc-'+i+'-mes">'+opts+'</select></div></div></div>';
+    }).join("");
+    host.innerHTML = cards + '<div><button class="btn btn-primary btn-sm" id="ocSalvar">Salvar parâmetros</button> <span class="section-sub">Aderência do mix: quanto o mix de SKUs do mês se parece com o mix médio dos meses (100% = igual) — quanto maior, mais linear.</span></div>';
+    document.getElementById("ocSalvar").addEventListener("click", ocSalvar);
+    // resultado
+    var res = document.getElementById("ocResultado"); if (!res) return;
+    var sel = state.ocUi.base;
+    var pills = BASES.map(function(b){ return '<button class="pill'+(sel===b?" active":"")+'" data-ocb="'+esc(b)+'">'+esc(b)+'</button>'; }).join("");
+    var C = ocCalc(sel), tot = BASES.map(function(b){ return ocCalc(b); });
+    function kpi(l,v,s,t){ return '<div class="kpi'+(t?" tone-"+t:"")+'"><div class="label">'+esc(l)+'</div><div class="value tabular">'+v+'</div>'+(s?'<div class="sub">'+esc(s)+'</div>':'')+'</div>'; }
+    var linhasBase = BASES.map(function(b, i){ var c = tot[i]; return '<tr><td><b>'+esc(b)+'</b></td><td class="num tabular">'+fmtInt(c.p.cap)+'</td><td class="num tabular" style="font-weight:700;">'+(c.capHl?fmtNum(c.capHl,0):'—')+'</td><td class="num tabular">'+(c.capHl&&c.p.cap?fmtNum(c.capHl/c.p.cap,1):'—')+'</td><td>'+(c.p.mesRef?abastPeriodoLabel(c.p.mesRef):'<span class="chip chip-warning">sem mês</span>')+'</td></tr>'; }).join("");
+    var linhasCurva = OC_CURVAS.map(function(c){ var x = C.porCurva[c]; return '<tr><td><b>'+c+'</b></td><td class="num tabular">'+fmtInt(x.cap)+'</td><td class="num tabular">'+fmtInt(x.n)+'</td><td class="num tabular" style="font-weight:700;">'+(x.capHl?fmtNum(x.capHl,0):'—')+'</td><td class="num tabular">'+(x.capHl&&x.cap?fmtNum(x.capHl/x.cap,1):'—')+'</td></tr>'; }).join("");
+    var linhasSku = C.validos.slice(0,300).map(function(x){ return '<tr><td class="tabular">'+esc(x.codigo)+'</td><td class="desc-cell"><div>'+esc(x.descricao)+'</div></td><td style="text-align:center;"><span class="chip chip-neutral">'+x.curva+'</span></td><td class="num tabular">'+fmtNum(x.pal,1)+'</td><td class="num tabular">'+fmtNum(x.pesoCurva*100,2)+'%</td><td class="num tabular" style="font-weight:700;">'+fmtNum(x.capPal,1)+'</td><td class="num tabular">'+fmtNum(x.hlPal,2)+'</td><td class="num tabular" style="font-weight:700;">'+fmtNum(x.capHl,1)+'</td></tr>'; }).join("");
+    res.innerHTML = '<div class="section-title" style="margin-top:6px;">Capacidade em HL</div>' +
+      '<div class="table-wrap compact"><table><thead><tr><th>Filial</th><th class="num">Capacidade (paletes)</th><th class="num">Capacidade (HL)</th><th class="num">HL / palete</th><th>Mês de referência</th></tr></thead><tbody>'+linhasBase+'</tbody></table></div>' +
+      '<div style="margin:14px 0 8px;" class="vz-grp"><span class="t">Detalhar filial</span><div>'+pills+'</div></div>' +
+      (C.p.mesRef && C.p.cap>0 ? '<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));">'+kpi("Capacidade (paletes)", fmtInt(C.p.cap), "parâmetro")+kpi("Capacidade (HL)", fmtNum(C.capHl,0), "calculado")+kpi("SKUs considerados", fmtInt(C.validos.length), C.semDados.length+" sem dados", C.semDados.length?"warning":"good")+kpi("HL / palete médio", C.p.cap? fmtNum(C.capHl/C.p.cap,1):"—", "do mix")+'</div>' +
+      '<div class="table-wrap compact" style="margin-top:12px;"><table><thead><tr><th>Curva</th><th class="num">Capacidade (pal)</th><th class="num">SKUs</th><th class="num">Capacidade (HL)</th><th class="num">HL / palete</th></tr></thead><tbody>'+linhasCurva+'</tbody></table></div>' +
+      '<div class="section-title" style="margin-top:16px;">Capacidade por SKU</div><div class="table-wrap compact" style="max-height:560px;"><table><thead><tr><th>Código</th><th>Produto</th><th style="text-align:center;">Curva</th><th class="num">Política (pal)</th><th class="num">% na curva</th><th class="num">Capacidade (pal)</th><th class="num">HL/palete</th><th class="num">Capacidade (HL)</th></tr></thead><tbody>'+linhasSku+'</tbody></table></div>' +
+      (C.semDados.length ? '<div class="section-sub" style="margin-top:8px;">'+C.semDados.length+' SKU(s) ficaram de fora por falta de dado (sem lead time/venda projetada, sem paletização ou sem curva): '+esc(C.semDados.slice(0,12).map(function(x){ return x.codigo; }).join(", "))+(C.semDados.length>12?"…":"")+'</div>' : '')
+      : '<div class="empty">Informe a capacidade e escolha o mês de referência desta filial (e salve) para ver o cálculo.</div>');
+    Array.prototype.forEach.call(res.querySelectorAll("[data-ocb]"), function(b){ b.addEventListener("click", function(){ state.ocUi.base = b.getAttribute("data-ocb"); renderOcCapacidade(); }); });
+  }
+  function renderOcMemoria(){
+    var host = document.getElementById("ocMemoriaHost"); if (!host) return;
+    var sel = state.ocUi.memBase, C = ocCalc(sel), p = C.p;
+    var pills = BASES.map(function(b){ return '<button class="pill'+(sel===b?" active":"")+'" data-ocm="'+esc(b)+'">'+esc(b)+'</button>'; }).join("");
+    function etapa(n, t, corpo){ return '<div style="margin-top:22px;"><div style="background:var(--surface-2); padding:8px 14px; border-radius:6px; font-size:18px; font-weight:800;">Etapa '+n+' – '+t+'</div><div style="padding:10px 4px;">'+corpo+'</div></div>'; }
+    function formula(t){ return '<div style="margin:8px 0; padding:8px 12px; border-left:4px solid var(--accent); background:var(--surface-2); font-weight:700;">'+t+'</div>'; }
+    var ok = p.cap>0 && p.mesRef;
+    var e1 = '<p>A capacidade física é informada nos Parâmetros, por filial e por curva de giro (A, B e C), a partir do layout operacional do armazém (fileiras × paletes por fileira, empilhamento, recuos).</p>' + formula('Capacidade (paletes) = Σ (Fileiras × Quantidade por fileira)') +
+      (ok ? '<table style="margin-top:6px;"><tbody><tr><td style="padding:2px 18px 2px 0;">Capacidade total</td><td class="num tabular"><b>'+fmtInt(p.cap)+' paletes</b></td></tr>'+OC_CURVAS.map(function(c){ return '<tr><td style="padding:2px 18px 2px 0;">Curva '+c+'</td><td class="num tabular">'+fmtInt(p[c])+' paletes</td></tr>'; }).join("")+'</tbody></table>' : '<p class="section-sub">Preencha os parâmetros desta filial para ver os números.</p>');
+    var e2 = '<p>A capacidade total é distribuída por curva operacional.</p>' + formula('% da capacidade = Capacidade da curva ÷ Capacidade total') + (ok ? '<div class="table-wrap compact"><table><thead><tr><th>Curva</th><th class="num">Capacidade (pal)</th><th class="num">% da capacidade</th></tr></thead><tbody>'+OC_CURVAS.map(function(c){ return '<tr><td>'+c+'</td><td class="num tabular">'+fmtInt(p[c])+'</td><td class="num tabular">'+fmtNum(p.cap?p[c]/p.cap*100:0,2)+'%</td></tr>'; }).join("")+'<tr><td><b>Total</b></td><td class="num tabular"><b>'+fmtInt(p.A+p.B+p.C)+'</b></td><td class="num tabular"><b>'+fmtNum(p.cap?(p.A+p.B+p.C)/p.cap*100:0,2)+'%</b></td></tr></tbody></table></div>' : '');
+    var topo = C.validos.slice(0,5);
+    var e3 = '<p>O peso de cada SKU vem da <b>Política de Estoque</b> do mês de referência'+(p.mesRef?' (<b>'+abastPeriodoLabel(p.mesRef)+'</b>)':'')+', em paletes (nível Objetivo). O peso é calculado <b>dentro da curva do SKU</b>. Produtos Market Place (Grupo 27) não entram na política, portanto ficam fora.</p>' + formula('% peso do SKU na curva = Política do SKU (paletes) ÷ Política total da curva (paletes)') +
+      (ok ? '<div class="table-wrap compact"><table><thead><tr><th>Curva</th><th class="num">Política total (pal)</th><th class="num">SKUs</th></tr></thead><tbody>'+OC_CURVAS.map(function(c){ return '<tr><td>'+c+'</td><td class="num tabular">'+fmtNum(C.porCurva[c].pal,1)+'</td><td class="num tabular">'+fmtInt(C.porCurva[c].n)+'</td></tr>'; }).join("")+'</tbody></table></div>' : '');
+    var e4 = '<p>O peso é aplicado sobre a capacidade da curva e depois convertido em HL.</p>' + formula('Capacidade do SKU (paletes) = % peso na curva × Capacidade da curva') + formula('Capacidade do SKU (HL) = Capacidade (paletes) × caixas por palete × HL por caixa') +
+      (ok && topo.length ? '<p class="section-sub">Exemplo com os 5 maiores SKUs desta filial:</p><div class="table-wrap compact"><table><thead><tr><th>Produto</th><th>Curva</th><th class="num">Política (pal)</th><th class="num">% peso</th><th class="num">Capacidade (pal)</th><th class="num">HL/palete</th><th class="num">Capacidade (HL)</th></tr></thead><tbody>'+topo.map(function(x){ return '<tr><td>'+esc(x.codigo+" · "+x.descricao)+'</td><td>'+x.curva+'</td><td class="num tabular">'+fmtNum(x.pal,1)+'</td><td class="num tabular">'+fmtNum(x.pesoCurva*100,2)+'%</td><td class="num tabular">'+fmtNum(x.capPal,1)+'</td><td class="num tabular">'+fmtNum(x.hlPal,2)+'</td><td class="num tabular"><b>'+fmtNum(x.capHl,1)+'</b></td></tr>'; }).join("")+'</tbody></table></div><p style="margin-top:8px;"><b>Capacidade total desta filial: '+fmtNum(C.capHl,0)+' HL</b> (soma de todos os SKUs).</p>' : '');
+    var fluxo = ["Layout físico do armazém","Capacidade em paletes por filial e curva (Parâmetros)","Política de Estoque do mês de referência (paletes, nível Objetivo)","% de peso de cada SKU dentro da sua curva","Capacidade do SKU em paletes","Conversão para HL (caixas por palete × HL por caixa)","Capacidade total em HL × estoque real"];
+    host.innerHTML = '<div class="vz-grp" style="margin-bottom:6px;"><span class="t">Filial</span><div>'+pills+'</div></div>' + etapa(1,"Capacidade física do layout",e1) + etapa(2,"Distribuição da capacidade por curva",e2) + etapa(3,"Peso dos SKUs pela Política de Estoque",e3) + etapa(4,"Capacidade por SKU em paletes e HL",e4) +
+      etapa("","Fluxo da memória de cálculo", fluxo.map(function(t,i){ return (i?'<div style="margin:2px 0 2px 14px; color:var(--text-muted);">↓</div>':'')+'<div style="font-weight:700;">'+t+'</div>'; }).join("")).replace("Etapa  – ","");
+    Array.prototype.forEach.call(host.querySelectorAll("[data-ocm]"), function(b){ b.addEventListener("click", function(){ state.ocUi.memBase = b.getAttribute("data-ocm"); renderOcMemoria(); }); });
   }
 
   async function boot(){
