@@ -9742,7 +9742,8 @@
     (doc.items||[]).forEach(function(it){
       if (!mkt && abastGrupoExcluido(it.c)) return;
       var cat = state.peCatalogo[it.c] || {};
-      var pal = cat.caixasPorPallet>0 ? it.q/cat.caixasPorPallet : null, hl = cat.hlPorCaixa>0 ? it.q*cat.hlPorCaixa : null;
+      var fz = (state.duziaSet && state.duziaSet[it.c]) ? 2 : 1;  // SKU em dúzia: 01.11 vem em dz (84 dz = 42 cx); Disponível vem em caixas (1 cx = 2 dz)
+      var pal = cat.caixasPorPallet>0 ? it.q/(cat.caixasPorPallet/fz) : null, hl = cat.hlPorCaixa>0 ? it.q*cat.hlPorCaixa*fz : null;
       if (pal==null || hl==null){ t.semPal.push(it.c); if (pal==null && hl==null) return; }
       t.sku++; if (pal!=null) t.pal += pal; if (hl!=null) t.hl += hl;
       var cv = (curvaMap && curvaMap[it.c]) || "—", pc = t.porCurva[cv]; if (pal!=null) pc.pal += pal; if (hl!=null) pc.hl += hl;
