@@ -406,6 +406,11 @@
         <h3 style="color:#b7791f;">Vencimentos &amp; FEFO</h3>
         <p>Farol de vencimentos, farol diário e quebra de FEFO</p>
       </button>
+      <button type="button" class="hub-card" data-hubmod="curvaabc">
+        <div class="hub-ico" style="background:#efe7fb;">📊</div>
+        <h3 style="color:#5b2fa8;">Curva ABC</h3>
+        <p>Curva ABC por hecto — estoque total e Market Place, mês a mês</p>
+      </button>
       <button type="button" class="hub-card" data-hubmod="usuarios" id="hubCardUsuarios" style="display:none;">
         <div class="hub-ico" style="background:#e8f6ee;">👥</div>
         <h3 style="color:#177245;">Usuários</h3>
@@ -427,6 +432,7 @@
     <button class="module-btn" id="btnHubVoltar" type="button">⌂ Módulos</button>
     <button class="module-btn" data-modulo="abastecimento">📦 Abastecimento &amp; Estoque</button>
     <button class="module-btn active" data-modulo="vencimentos">⏳ Vencimentos &amp; FEFO</button>
+    <button class="module-btn" data-modulo="curvaabc">📊 Curva ABC</button>
     <button class="module-btn" data-modulo="usuarios" id="btnModUsuarios" style="display:none;">👥 Usuários</button>
     <span class="user-chip" id="userChip"></span>
   </div>
@@ -440,6 +446,8 @@
     <button class="tab-btn" data-tab="farolDiario">Farol Diário de Vencimentos</button>
     <button class="tab-btn" data-tab="quebraFefo">Quebra de FEFO</button>
     <button class="tab-btn" data-tab="vendaZero">Venda Zero</button>
+    <button class="tab-btn" data-tab="curvaAbc">Curva ABC</button>
+    <button class="tab-btn" data-tab="curvaMkt">Market Place</button>
     <button class="tab-btn" data-tab="usuarios">Usuários</button>
   </div>
 </div>
@@ -784,6 +792,28 @@
     </div>
   </section>
 
+  <section class="panel" id="panel-curvaAbc">
+    <div class="card card-pad">
+      <div class="section-title">Curva ABC — estoque total</div>
+      <div class="section-sub">Ranking dos produtos pela venda em hectolitro (PE Oficial), incluindo os produtos Market Place. A classificação A/B/C usa os cortes dos Parâmetros; cada mês é ranqueado dentro do próprio mês.</div>
+      <div id="caFiltros" style="margin-top:12px;"></div>
+      <div class="kpi-grid" id="caKpis" style="margin-top:14px; grid-template-columns:repeat(auto-fit,minmax(150px,1fr));"></div>
+      <div id="caChart"></div>
+      <div id="caTabela" style="margin-top:12px;"></div>
+    </div>
+  </section>
+
+  <section class="panel" id="panel-curvaMkt">
+    <div class="card card-pad">
+      <div class="section-title">Curva ABC — Market Place</div>
+      <div class="section-sub">Curva separada só com os produtos Market Place (Grupo 27, fora da Política de Estoque), calculada pela venda deles.</div>
+      <div id="cmFiltros" style="margin-top:12px;"></div>
+      <div class="kpi-grid" id="cmKpis" style="margin-top:14px; grid-template-columns:repeat(auto-fit,minmax(150px,1fr));"></div>
+      <div id="cmChart"></div>
+      <div id="cmTabela" style="margin-top:12px;"></div>
+    </div>
+  </section>
+
   <section class="panel" id="panel-vendaZero">
     <div class="card card-pad">
       <div class="section-title">Venda Zero — produtos com saldo e sem vender</div>
@@ -1057,6 +1087,7 @@
   var MODULOS = {
     abastecimento: ["abastecimento", "politicaEstoque", "importacoes", "parametros"],
     vencimentos: ["farolVencimentos", "importVencimentos", "farolDiario", "quebraFefo", "vendaZero"],
+    curvaabc: ["curvaAbc", "curvaMkt"],
     usuarios: ["usuarios"]
   };
   function moduloDaAba(tab){
@@ -8572,6 +8603,8 @@
     farolDiario: [renderFarolDiarioTab],
     quebraFefo: [renderFefoTab],
     vendaZero: [function(){ if (typeof renderVendaZeroTab === "function") renderVendaZeroTab(); }],
+    curvaAbc: [function(){ renderCurvaAbc("total"); }],
+    curvaMkt: [function(){ renderCurvaAbc("mkt"); }],
     usuarios: [function(){ if (typeof usuariosRender === "function") usuariosRender(); }]
   };
   function renderAll(){
@@ -9339,6 +9372,111 @@
       '<div class="section-sub" style="margin-top:6px;">Ordenado por dias sem venda. Data de corte da venda: '+fmtDate(rows[0].corte)+'.</div>';
     var sv = document.getElementById("vzSortValor");
     if (sv) sv.addEventListener("click", function(){ state.vzSort = state.vzSort==="valor" ? "dias" : "valor"; renderVendaZeroTab(); });
+  }
+
+  // ======================= Curva ABC (módulo) =======================
+  // Curva por venda em hectolitro (PE Oficial), mesmos cortes A/B/C dos Parâmetros. "Estoque total" inclui
+  // os produtos Market Place (Grupo 27); a aba "Market Place" faz uma curva separada só com eles.
+  state.ca = { total:{ base:"todas", curva:"todas", busca:"", visao:"resumo", tipo:"todos" }, mkt:{ base:"todas", curva:"todas", busca:"", visao:"resumo", tipo:"mkt" } };
+  var CA_COR = { A:{ bg:"rgba(46,160,90,.26)", fg:"var(--text-primary)", solid:"#2e9e5a" }, B:{ bg:"rgba(240,190,20,.34)", fg:"var(--text-primary)", solid:"#e0a800" }, C:{ bg:"rgba(220,60,60,.26)", fg:"var(--text-primary)", solid:"#d64545" } };
+  function caMesLbl(pk){ var m = /^(\d{4})-(\d{2})$/.exec(pk||""); var n = ["jan","fev","mar","abr","mai","jun","jul","ago","set","out","nov","dez"]; return m ? n[+m[2]-1]+"/"+m[1].slice(2) : pk; }
+  function caClasse(pctAcum){ return pctAcum <= state.thresholds.curvaAPercent ? "A" : (pctAcum <= state.thresholds.curvaBPercent ? "B" : "C"); }
+  function caCalc(scope){
+    var st = state.ca[scope], bases = st.base==="todas" ? BASES : [st.base];
+    var items = {}, minD = null, maxD = null, meses = {};
+    bases.forEach(function(b){
+      var d = state.peVendaPorBase[b]; if (!d || !d.porCodigo) return;
+      if (d.minData && (!minD || d.minData < minD)) minD = d.minData;
+      if (d.maxData && (!maxD || d.maxData > maxD)) maxD = d.maxData;
+      Object.keys(d.porCodigo).forEach(function(cod){
+        var isM = abastGrupoExcluido(cod);
+        if (scope==="mkt" ? !isM : (st.tipo==="mkt" ? !isM : (st.tipo==="sem" && isM))) return;
+        var pc = d.porCodigo[cod], it = items[cod] || (items[cod] = { codigo:cod, hl:0, mensal:{}, mkt:isM });
+        it.hl += pc.somaHl || 0;
+        Object.keys(pc.mensal||{}).forEach(function(m){ it.mensal[m] = (it.mensal[m]||0) + pc.mensal[m]; meses[m] = true; });
+      });
+    });
+    var list = Object.keys(items).map(function(k){ return items[k]; }).filter(function(x){ return x.hl > 0; });
+    list.sort(function(a,b){ return b.hl - a.hl; });
+    var total = list.reduce(function(s,x){ return s+x.hl; }, 0), cum = 0;
+    list.forEach(function(x, i){
+      cum += x.hl; x.pos = i+1; x.pct = total ? x.hl/total*100 : 0; x.acum = total ? cum/total*100 : 100; x.curva = caClasse(x.acum);
+      var cat = state.peCatalogo[x.codigo] || {}; x.descricao = cat.descricao || "(sem descrição)"; x.emb = cat.embalagem || "";
+      x.cm = {};
+    });
+    var ml = Object.keys(meses).sort();
+    ml.forEach(function(m){
+      var arr = list.filter(function(x){ return (x.mensal[m]||0) > 0; }).sort(function(a,b){ return b.mensal[m]-a.mensal[m]; });
+      var t = arr.reduce(function(s,x){ return s+x.mensal[m]; }, 0), c = 0;
+      arr.forEach(function(x){ c += x.mensal[m]; x.cm[m] = caClasse(t ? c/t*100 : 100); });
+    });
+    var dias = (minD && maxD) ? Math.max(1, vzDiff(maxD, minD)+1) : 1;
+    return { list:list, total:total, meses:ml, dias:dias, minD:minD, maxD:maxD };
+  }
+  function caPareto(list, total){
+    var n = list.length; if (!n) return "";
+    var W = 1000, H = 300, pl = 44, pr = 44, pt = 16, pb = 30, pw = W-pl-pr, ph = H-pt-pb;
+    var maxHl = list[0].hl || 1, bw = pw/n;
+    function yP(v){ return pt + ph - v/100*ph; }
+    var A = state.thresholds.curvaAPercent, B = state.thresholds.curvaBPercent, nA = 0, nB = 0;
+    list.forEach(function(x){ if (x.curva==="A") nA++; else if (x.curva==="B") nB++; });
+    var svg = '<svg viewBox="0 0 '+W+' '+H+'" width="100%" style="display:block;font-family:Inter,sans-serif;" role="img" aria-label="Pareto da curva ABC">';
+    svg += '<rect x="'+pl+'" y="'+pt+'" width="'+(bw*nA)+'" height="'+ph+'" fill="'+CA_COR.A.bg+'"/><rect x="'+(pl+bw*nA)+'" y="'+pt+'" width="'+(bw*nB)+'" height="'+ph+'" fill="'+CA_COR.B.bg+'"/><rect x="'+(pl+bw*(nA+nB))+'" y="'+pt+'" width="'+(bw*(n-nA-nB))+'" height="'+ph+'" fill="'+CA_COR.C.bg+'"/>';
+    [0,25,50,75,100].forEach(function(v){ svg += '<line x1="'+pl+'" x2="'+(W-pr)+'" y1="'+yP(v)+'" y2="'+yP(v)+'" stroke="var(--gridline)"/><text x="'+(pl-6)+'" y="'+(yP(v)+4)+'" font-size="12" text-anchor="end" fill="var(--text-muted)">'+v+'%</text>'; });
+    list.forEach(function(x, i){ var h = x.hl/maxHl*ph*0.9; svg += '<rect x="'+(pl+bw*i+bw*0.1).toFixed(2)+'" y="'+(pt+ph-h).toFixed(1)+'" width="'+Math.max(0.6,bw*0.8).toFixed(2)+'" height="'+h.toFixed(1)+'" fill="'+CA_COR[x.curva].solid+'" opacity=".75"/>'; });
+    svg += '<path d="'+list.map(function(x,i){ return (i?"L ":"M ")+(pl+bw*(i+0.5)).toFixed(1)+" "+yP(x.acum).toFixed(1); }).join(" ")+'" fill="none" stroke="var(--text-primary)" stroke-width="2.5"/>';
+    [[A,nA,"A"],[B,nA+nB,"B"]].forEach(function(t){ svg += '<line x1="'+pl+'" x2="'+(W-pr)+'" y1="'+yP(t[0])+'" y2="'+yP(t[0])+'" stroke="var(--text-muted)" stroke-dasharray="5 4"/><text x="'+(W-pr+4)+'" y="'+(yP(t[0])+4)+'" font-size="12" font-weight="700" fill="var(--text-muted)">'+t[0]+'%</text>'; });
+    svg += '<text x="'+(pl+bw*nA/2)+'" y="'+(H-8)+'" font-size="13" font-weight="800" text-anchor="middle" fill="var(--text-primary)">A · '+nA+' produtos</text>';
+    svg += '<text x="'+(pl+bw*(nA+nB/2))+'" y="'+(H-8)+'" font-size="13" font-weight="800" text-anchor="middle" fill="var(--text-primary)">B · '+nB+'</text>';
+    svg += '<text x="'+(pl+bw*(nA+nB+(n-nA-nB)/2))+'" y="'+(H-8)+'" font-size="13" font-weight="800" text-anchor="middle" fill="var(--text-primary)">C · '+(n-nA-nB)+'</text>';
+    return svg + '</svg>';
+  }
+  function renderCurvaAbc(scope){
+    var P = scope==="mkt" ? "cm" : "ca", st = state.ca[scope];
+    var fil = document.getElementById(P+"Filtros"); if (!fil) return;
+    var data = caCalc(scope), all = data.list;
+    function pill(attr, v, l, on){ return '<button class="pill'+(on?" active":"")+'" '+attr+'="'+esc(v)+'">'+esc(l)+'</button>'; }
+    function grp(t, inner){ return '<div class="vz-grp"><span class="t">'+t+'</span><div>'+inner+'</div></div>'; }
+    var gBase = ["todas"].concat(BASES).map(function(b){ return pill("data-cab", b, b==="todas"?"Todas as filiais":b, st.base===b); }).join("");
+    var gCurva = ["todas","A","B","C"].map(function(c){ return pill("data-cac", c, c==="todas"?"Todas":"Curva "+c, st.curva===c); }).join("");
+    var gVis = pill("data-cav","resumo","Resumo (M-2 · M-1 · Atual)", st.visao==="resumo") + pill("data-cav","mensal","Mensal (todos os meses)", st.visao==="mensal");
+    var gTipo = scope==="mkt" ? "" : grp("Produtos", pill("data-cat","todos","Todos (incl. Market Place)", st.tipo==="todos") + pill("data-cat","sem","Sem Market Place", st.tipo==="sem") + pill("data-cat","mkt","Só Market Place", st.tipo==="mkt"));
+    fil.innerHTML = '<div style="display:flex; gap:20px; flex-wrap:wrap; align-items:flex-end;">' + grp("Filial", gBase) + gTipo + grp("Curva", gCurva) + '</div>' +
+      '<div style="display:flex; gap:20px; flex-wrap:wrap; align-items:flex-end; margin-top:12px;">' + grp("Visão", gVis) +
+      grp("Busca", '<input type="search" id="'+P+'Busca" placeholder="Código ou descrição…" style="min-width:220px;" value="'+esc(st.busca)+'">') +
+      '<span style="flex:1"></span><button class="btn btn-sm" id="'+P+'Export">⬇ Exportar Excel</button></div>';
+    function bind(attr, key){ Array.prototype.forEach.call(fil.querySelectorAll("["+attr+"]"), function(b){ b.addEventListener("click", function(){ st[key] = b.getAttribute(attr); renderCurvaAbc(scope); }); }); }
+    bind("data-cab","base"); bind("data-cac","curva"); bind("data-cav","visao"); bind("data-cat","tipo");
+    var bu = document.getElementById(P+"Busca");
+    bu.addEventListener("input", function(){ st.busca = this.value; var pos = this.selectionStart; renderCurvaAbc(scope); var n = document.getElementById(P+"Busca"); n.focus(); try{ n.setSelectionRange(pos,pos); }catch(e){} });
+    var kp = document.getElementById(P+"Kpis"), ch = document.getElementById(P+"Chart"), tb = document.getElementById(P+"Tabela");
+    if (!all.length){ kp.innerHTML = ""; ch.innerHTML = ""; tb.innerHTML = '<div class="empty">Sem venda importada (PE Oficial) para esse recorte. Importe o PE Oficial no módulo Abastecimento.</div>'; return; }
+    function cnt(c){ var a = all.filter(function(x){ return x.curva===c; }); return { n:a.length, hl:a.reduce(function(s,x){ return s+x.hl; },0) }; }
+    var cA = cnt("A"), cB = cnt("B"), cC = cnt("C");
+    function kpi(l, v, sub, tone){ return '<div class="kpi'+(tone?" tone-"+tone:"")+'"><div class="label">'+esc(l)+'</div><div class="value tabular">'+v+'</div>'+(sub?'<div class="sub">'+esc(sub)+'</div>':'')+'</div>'; }
+    kp.innerHTML = kpi("Total de produtos", fmtInt(all.length), (st.tipo==="mkt"||scope==="mkt") ? "Market Place" : "com venda no período") + kpi("Total hecto", fmtNum(data.total,0), caMesLbl(data.minD&&data.minD.slice(0,7))+" a "+caMesLbl(data.maxD&&data.maxD.slice(0,7))) + kpi("Hecto / dia", fmtNum(data.total/data.dias,1), data.dias+" dias corridos") +
+      kpi("Curva A", fmtInt(cA.n), fmtNum(cA.hl/data.total*100,0)+"% do hecto", "good") + kpi("Curva B", fmtInt(cB.n), fmtNum(cB.hl/data.total*100,0)+"% do hecto", "warning") + kpi("Curva C", fmtInt(cC.n), fmtNum(cC.hl/data.total*100,0)+"% do hecto", "critical");
+    ch.innerHTML = '<div class="section-sub" style="font-weight:700; color:var(--text-primary); margin:14px 0 4px;">Pareto — cada barra é um produto (do maior para o menor hecto); linha = % acumulado. Cortes: A até '+state.thresholds.curvaAPercent+'% · B até '+state.thresholds.curvaBPercent+'%</div>' + caPareto(all, data.total);
+    var q = (st.busca||"").trim().toLowerCase();
+    var rows = all.filter(function(x){ return (st.curva==="todas" || x.curva===st.curva) && (!q || String(x.codigo).toLowerCase().indexOf(q)>=0 || x.descricao.toLowerCase().indexOf(q)>=0); });
+    var mcols = st.visao==="mensal" ? data.meses : data.meses.slice(-3);
+    var rot = st.visao==="mensal" ? null : ["M-2","M-1","Atual"].slice(3-mcols.length);
+    function cell(c){ return c ? '<td style="text-align:center; background:'+CA_COR[c].bg+'; font-weight:800; color:'+CA_COR[c].fg+';">'+c+'</td>' : '<td style="text-align:center; color:var(--text-muted);">·</td>'; }
+    function tend(x){ var m = data.meses; if (m.length<2) return ""; var a = x.cm[m[m.length-2]], b = x.cm[m[m.length-1]]; if (!a||!b||a===b) return ""; var o = {A:3,B:2,C:1}; return o[b]>o[a] ? '<span style="color:#2e9e5a;font-weight:800;" title="Subiu de curva">▲</span>' : '<span style="color:#d64545;font-weight:800;" title="Caiu de curva">▼</span>'; }
+    var LIM = 500;
+    var thead = '<tr><th class="num">#</th><th>Código</th><th style="min-width:300px;">Produto</th><th style="text-align:center;">Curva</th><th class="num">Hecto</th><th class="num">Hecto/dia</th><th class="num">% total</th><th style="min-width:150px;">Pareto acumulado</th>' + mcols.map(function(m,i){ return '<th style="text-align:center;">'+(rot?rot[i]+'<div style="font-weight:400;font-size:10px;">'+caMesLbl(m)+'</div>':caMesLbl(m))+'</th>'; }).join("") + '<th style="text-align:center;">Δ</th></tr>';
+    var tbody = rows.slice(0, LIM).map(function(x){
+      return '<tr><td class="num tabular">'+x.pos+'</td><td class="tabular">'+esc(x.codigo)+'</td><td class="desc-cell"><div>'+esc(x.descricao)+(x.mkt && scope!=="mkt" ? ' <span class="chip chip-neutral">MKT</span>' : '')+'</div>'+(x.emb?'<div class="sub" style="font-size:11px;color:var(--text-muted);">'+esc(x.emb)+'</div>':'')+'</td>' +
+        '<td style="text-align:center; background:'+CA_COR[x.curva].bg+'; font-weight:800;">'+x.curva+'</td><td class="num tabular" style="font-weight:700;">'+fmtNum(x.hl,0)+'</td><td class="num tabular">'+fmtNum(x.hl/data.dias,2)+'</td><td class="num tabular">'+fmtNum(x.pct,1)+'%</td>' +
+        '<td><div style="display:flex; align-items:center; gap:8px;"><span class="tabular" style="min-width:38px;">'+fmtNum(x.acum,0)+'%</span><div class="vz-bar" style="flex:1;"><i style="width:'+x.acum.toFixed(0)+'%; background:'+CA_COR[x.curva].solid+';"></i></div></div></td>' +
+        mcols.map(function(m){ return cell(x.cm[m]); }).join("") + '<td style="text-align:center;">'+tend(x)+'</td></tr>';
+    }).join("");
+    tb.innerHTML = '<div class="table-wrap compact" style="max-height:680px;"><table><thead>'+thead+'</thead><tbody>'+tbody+'</tbody></table></div>' +
+      '<div class="section-sub" style="margin-top:6px;">'+(rows.length>LIM ? 'Mostrando os '+LIM+' primeiros de '+rows.length+' — use a busca ou exporte para o Excel. ' : '')+'Curva do período = ranking pelo hecto total vendido; cada mês é ranqueado dentro do próprio mês. Δ compara o último mês com o anterior.</div>';
+    document.getElementById(P+"Export").addEventListener("click", function(){
+      exportRows(rows.map(function(x){ var o = { "Posição":x.pos, "Código":x.codigo, "Produto":x.descricao, "Embalagem":x.emb, "Market Place":x.mkt?"Sim":"", "Curva":x.curva, "Hecto":Math.round(x.hl*100)/100, "Hecto/dia":Math.round(x.hl/data.dias*100)/100, "% do total":Math.round(x.pct*100)/100, "% acumulado":Math.round(x.acum*100)/100 }; data.meses.forEach(function(m){ o[caMesLbl(m)] = x.cm[m]||""; }); return o; }),
+        "curva_abc_"+(scope==="mkt"?"marketplace_":"")+todayISO()+".xlsx", "Curva ABC", [{wch:8},{wch:9},{wch:44},{wch:16},{wch:12},{wch:7},{wch:11},{wch:11},{wch:10},{wch:11}]);
+    });
   }
 
   async function boot(){
